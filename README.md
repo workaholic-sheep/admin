@@ -1,6 +1,6 @@
 # Case Management Tool
 
-A private client dashboard and intake app. Locally, it reads the `MasterData` sheet in the Excel workbook. On Vercel, it uses Google Sheets; the local workbook is excluded from Git.
+A private client dashboard and intake app. Locally, it reads the `MasterData` sheet in the Excel workbook. On Vercel, it reads the configured Google spreadsheet; when that spreadsheet contains a `MasterData(Klievont)` tab with a `CaeType` header, that tab is used for client rows. The local reference workbook is excluded from Git.
 
 ## Local development
 
