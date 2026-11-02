@@ -82,7 +82,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @keyframes appear { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; animation: appear .42s .04s ease both; }
-.metric { min-width: 0; min-height: 133px; padding: 17px 18px 15px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.metric { min-width: 0; min-height: 133px; padding: 17px 18px 15px; border: 1px solid var(--line); border-radius: 6px; background: #fff; transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+.metric:hover { transform: translateY(-4px); border-color: #cad9cb; box-shadow: 0 10px 24px rgb(37 55 46 / 10%); }
+.metric-featured { grid-column: span 2; min-height: 184px; padding: 21px 23px 19px; }
+.metric-featured .metric-top span { font-size: 15px; }
+.metric-featured .metric-top svg { width: 21px; height: 21px; }
+.metric-featured .metric-value { margin-top: 21px; font-size: 42px; }
+.metric-featured .metric-note { font-size: 13px; }
 .metric-top { display: flex; align-items: center; justify-content: space-between; color: #79867d; font-size: 11px; font-weight: 600; }
 .metric-top svg { color: var(--tone); }
 .metric-green { --tone: #548568; --tint: #e5efe6; }
@@ -124,6 +130,10 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
 .page-footer .sync-dot { width: 6px; height: 6px; box-shadow: none; }
 .load-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid #edd0c6; border-radius: 5px; background: #fcf4f1; color: #975846; font-size: 12px; }
 .load-error button { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: inherit; font-size: 11px; font-weight: 700; cursor: pointer; }
+.coming-soon { display: grid; min-height: 340px; align-content: center; justify-items: start; gap: 13px; padding: 40px; animation: appear .35s ease both; }
+.coming-soon-mark { display: grid; width: 46px; height: 46px; place-items: center; border: 1px solid #dfe8df; border-radius: 7px; background: #eaf1ea; color: var(--forest); }
+.coming-soon h1 { margin: 0; color: #26392e; font-family: 'DM Serif Display', Georgia, serif; font-size: 34px; font-weight: 400; }
+.coming-soon p { margin: 0; padding: 6px 10px; border-radius: 4px; background: #f0f3ef; color: #64746a; font-size: 13px; font-weight: 600; }
 
 .roster-heading { margin-bottom: 21px; }
 .roster-surface { overflow: hidden; animation: appear .4s ease both; }
@@ -256,6 +266,7 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
   .page-content { padding-right: 26px; padding-left: 26px; }
   .topbar { padding: 0 26px; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-featured { grid-column: span 2; }
   .dashboard-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
@@ -324,6 +335,10 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
   .field-wide { grid-column: auto; }
   .welcome-row .button-secondary { max-width: 112px; white-space: normal; }
   .welcome-row .button-secondary svg { flex: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .metric { transition: none; }
+  .metric:hover { transform: none; }
 }
 
 :root {
