@@ -72,7 +72,7 @@ export function mapMasterData(row) {
     todayDate: normalizeDate(row['Todays Date']),
     daysRemaining: row['Days Remaining '] || row['Days Remaining'] || '',
     notes: row.NOTES || row.Notes || '',
-    caseType: row.CaeType || row.CaseType || row['Case Type'] || '',
+    caseType: row.CaseType || row.CaeType || row['Case Type'] || '',
   };
 }
 
@@ -424,6 +424,7 @@ async function addClientToWorkbook(filePath, input) {
     'Translator Needed': input.translator,
     'Date Onboarded': dateFromInput(input.onboardingDate) || createdOn,
     'Meeting Frequency': input.frequency,
+    CaseType: input.caseType,
     CaeType: input.caseType,
     'Date of Interview': dateFromInput(input.interviewDate),
     'Date Contacted': dateFromInput(input.lastContactDate),
@@ -500,6 +501,7 @@ async function updateClientInWorkbook(filePath, clientId, input) {
     ['Translator Needed', String(input.translator ?? '').trim()],
     ['Date Onboarded', dateFromInput(input.onboardingDate) || ''],
     ['Meeting Frequency', String(input.frequency ?? '').trim()],
+    ['CaseType', String(input.caseType ?? '').trim()],
     ['CaeType', String(input.caseType ?? '').trim()],
     ['Date of Interview', dateFromInput(input.interviewDate) || ''],
     ['Date Contacted', dateFromInput(input.lastContactDate) || ''],

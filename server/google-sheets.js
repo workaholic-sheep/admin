@@ -220,7 +220,7 @@ export function createGoogleSheetStore({
     put('Translator Needed', input.translator || 'No');
     putFormula('Date Onboarded', dateFormula(input.onboardingDate) || '=TODAY()');
     put('Meeting Frequency', input.frequency || '');
-    put('CaeType', input.caseType || '');
+    put('CaseType', input.caseType || '');
     putFormula('Date of Interview', dateFormula(input.interviewDate));
     putFormula('Date Contacted', dateFormula(input.lastContactDate));
     put('Outcome', input.outcome || '');
@@ -319,7 +319,7 @@ export function createGoogleSheetStore({
     put('Translator Needed', input.translator);
     putDate('Date Onboarded', input.onboardingDate);
     put('Meeting Frequency', input.frequency);
-    put('CaeType', input.caseType);
+    put('CaseType', input.caseType);
     putDate('Date of Interview', input.interviewDate);
     putDate('Date Contacted', input.lastContactDate);
     put('Outcome ', input.outcome);
