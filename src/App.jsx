@@ -7,6 +7,8 @@ import {
   Check,
   ChevronDown,
   Clock3,
+  FileCheck2,
+  FileText,
   CreditCard,
   Eye,
   EyeOff,
@@ -20,9 +22,11 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  ShieldCheck,
   UsersRound,
   X,
 } from 'lucide-react';
+import { CASE_TYPES, countCaseTypes, isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
 
 const frequencies = [
   'Once a Month',
@@ -195,6 +199,24 @@ function FilterMenu({ label, value, options, icon: Icon, onChange }) {
   );
 }
 
+function CaseTypePicker({ value, onChange }) {
+  const knownTypes = new Set(CASE_TYPES.map((type) => type.toUpperCase()));
+  const otherValues = String(value || '').split(/\s*\+\s*/).filter((part) => part && !knownTypes.has(part.toUpperCase()));
+
+  return (
+    <fieldset className="case-type-picker field field-wide">
+      <legend>Case type</legend>
+      <div className="case-type-options">
+        {CASE_TYPES.map((caseType) => <label className="case-type-option" key={caseType}>
+          <input type="checkbox" checked={isCaseTypeSelected(value, caseType)} onChange={(event) => onChange(updateCaseTypeValue(value, caseType, event.target.checked))} />
+          <span>{caseType}</span>
+        </label>)}
+      </div>
+      {otherValues.length > 0 && <span className="field-hint">Other existing value retained: {otherValues.join(' + ')}</span>}
+    </fieldset>
+  );
+}
+
 function ClientForm({ onClose, onCreated }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -202,6 +224,7 @@ function ClientForm({ onClose, onCreated }) {
     name: '',
     email: '',
     phone: '',
+    caseType: '',
     translator: 'No',
     onboardingDate: centralDateKey(),
     frequency: 'Once a Month',
@@ -251,6 +274,7 @@ function ClientForm({ onClose, onCreated }) {
             <label className="field field-wide">Client name <b>*</b><input autoFocus name="name" value={form.name} onChange={update} required maxLength={120} placeholder="Full name" /></label>
             <label className="field">Email<input name="email" type="email" value={form.email} onChange={update} maxLength={180} placeholder="name@example.com" /></label>
             <label className="field">Phone<input name="phone" value={form.phone} onChange={update} maxLength={40} placeholder="Phone number" /></label>
+            <CaseTypePicker value={form.caseType} onChange={(caseType) => setForm((current) => ({ ...current, caseType }))} />
             <label className="field">Meeting frequency<select name="frequency" value={form.frequency} onChange={update}>{frequencies.map((frequency) => <option key={frequency}>{frequency}</option>)}</select><ChevronDown size={15} /></label>
             <label className="field">Translator needed<select name="translator" value={form.translator} onChange={update}><option>No</option><option>Yes</option></select><ChevronDown size={15} /></label>
           </div>
@@ -279,6 +303,7 @@ function editValues(client) {
     name: client.name || '',
     email: client.email || '',
     phone: client.phone || '',
+    caseType: client.caseType || '',
     translator: client.translator || 'No',
     onboardingDate: client.onboardingDate || '',
     frequency: client.frequency || frequencies[0],
@@ -345,6 +370,7 @@ function ClientDetails({ client, courtDates, onClose, onUpdate }) {
             <label className="field field-wide">Client name<input name="name" value={form.name} onChange={update} required maxLength={120} /></label>
             <label className="field">Email<input name="email" type="email" value={form.email} onChange={update} maxLength={180} /></label>
             <label className="field">Phone<input name="phone" value={form.phone} onChange={update} maxLength={40} /></label>
+            <CaseTypePicker value={form.caseType} onChange={(caseType) => setForm((current) => ({ ...current, caseType }))} />
             <label className="field">Meeting frequency<select name="frequency" value={form.frequency} onChange={update}>{frequencyOptions.map((frequency) => <option key={frequency}>{frequency}</option>)}</select><ChevronDown size={15} /></label>
             <label className="field">Translator needed<select name="translator" value={form.translator} onChange={update}><option>No</option><option>Yes</option></select><ChevronDown size={15} /></label>
             <label className="field">Date onboarded<input type="date" name="onboardingDate" value={form.onboardingDate} onChange={update} /></label>
@@ -397,6 +423,7 @@ function Dashboard({ clients, courtDates, onShowClients, onSelectClient, onCompl
     .sort((left, right) => left.dueIn - right.dueIn), [clients, today]);
   const dueSoon = dueClients.filter((client) => client.dueIn <= 7).length;
   const pendingPayments = clients.filter((client) => client.paymentStatus.toLowerCase() === 'pending').length;
+  const caseTypeCounts = countCaseTypes(clients);
   const nextFollowUp = dueClients.find((client) => client.dueIn >= 0) || null;
   const rosterNames = new Set(clients.map((client) => normalizeClientName(client.name)));
   const nextCourtDate = courtDates
@@ -404,8 +431,6 @@ function Dashboard({ clients, courtDates, onShowClients, onSelectClient, onCompl
     .map((event) => ({ ...event, daysUntil: daysUntil(event.date, today) }))
     .filter((event) => event.daysUntil !== null && event.daysUntil >= 0)
     .sort((left, right) => left.daysUntil - right.daysUntil)[0] || null;
-  const frequencyCounts = frequencies.map((frequency) => ({ frequency, count: clients.filter((client) => client.frequency.toLowerCase() === frequency.toLowerCase()).length }));
-  const maxFrequency = Math.max(...frequencyCounts.map((item) => item.count), 1);
   const nextClients = dueClients.slice(0, 6);
   const [completingId, setCompletingId] = useState('');
 
@@ -424,16 +449,14 @@ function Dashboard({ clients, courtDates, onShowClients, onSelectClient, onCompl
         <Metric label="Payments pending" value={pendingPayments} note={`${clients.length ? Math.round((pendingPayments / clients.length) * 100) : 0}% of client roster`} tone="rose" icon={CreditCard} />
         <Metric label="Next follow-up" value={nextFollowUp ? formatDate(nextFollowUp.nextContactDate, { month: 'short', day: 'numeric' }) : '—'} note={nextFollowUp?.name || 'No upcoming follow-up'} tone="blue" icon={CalendarClock} />
         <Metric label="Next court date" value={nextCourtDate ? formatDate(nextCourtDate.date, { month: 'short', day: 'numeric' }) : '—'} note={nextCourtDate?.clientName || 'No upcoming court date'} tone="green" icon={CalendarDays} />
+        <Metric label="VAWA" value={caseTypeCounts.VAWA} note="Assigned clients" tone="rose" icon={ShieldCheck} />
+        <Metric label="I-485" value={caseTypeCounts['I-485']} note="Assigned clients" tone="blue" icon={FileCheck2} />
+        <Metric label="I-589" value={caseTypeCounts['I-589']} note="Assigned clients" tone="amber" icon={FileText} />
       </div>
       <div className="dashboard-grid">
         <section className="surface followup-surface">
           <div className="section-heading"><div><span className="eyebrow">CLIENT CARE</span><h2>Next follow-ups</h2></div><button className="text-button" onClick={onShowClients}>All clients <ArrowRight size={15} /></button></div>
           {nextClients.length ? <div className="followup-list">{nextClients.map((client) => <div className="followup-row" key={client.id || client.email}><button className="followup-open" onClick={() => onSelectClient(client)}><span className="due-marker"><CalendarClock size={17} /></span><span className="followup-person"><strong>{client.name}</strong><small>{client.email || client.frequency || 'No contact details'}</small></span><span className="due-date">{client.dueIn === 0 ? 'Today' : `In ${client.dueIn}d`}<small>{formatDate(client.nextContactDate, { month: 'short', day: 'numeric' })}</small></span><ArrowRight className="row-arrow" size={15} /></button><button className="followup-done" onClick={() => complete(client)} disabled={completingId === client.id} aria-label={`Mark follow-up done for ${client.name}`}><Check size={14} /><span>{completingId === client.id ? 'Saving…' : 'Done'}</span></button></div>)}</div> : <div className="empty-state"><CalendarClock size={22} /><p>No upcoming follow-ups.</p></div>}
-        </section>
-        <section className="surface frequency-surface">
-          <div className="section-heading"><div><span className="eyebrow">ROSTER MIX</span><h2>Meeting frequency</h2></div><span className="small-count">{clients.length} total</span></div>
-          <div className="frequency-list">{frequencyCounts.map(({ frequency, count }, index) => <div className="frequency-row" key={frequency}><div className="frequency-label"><span>{frequency}</span><b>{count}</b></div><div className="bar-track"><i style={{ width: `${Math.max(count ? 4 : 0, (count / maxFrequency) * 100)}%`, '--bar-index': index }} /></div></div>)}</div>
-          <div className="frequency-footer"><span><i />Active roster</span><span>{pendingPayments} payment pending</span></div>
         </section>
       </div>
     </>

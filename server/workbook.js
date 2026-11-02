@@ -56,8 +56,8 @@ function normalizeDate(value) {
 
 export function mapMasterData(row) {
   return {
-    id: row['ID No.'] || '',
-    name: row['Client Name'] || '',
+    id: row['ID No.'] || row.ClientID || row['Client ID'] || '',
+    name: row['Client Name'] || row.ClientName || row.Name || '',
     email: row.Email || '',
     phone: row.PHONE || '',
     translator: row['Translator Needed'] || '',
@@ -72,6 +72,7 @@ export function mapMasterData(row) {
     todayDate: normalizeDate(row['Todays Date']),
     daysRemaining: row['Days Remaining '] || row['Days Remaining'] || '',
     notes: row.NOTES || row.Notes || '',
+    caseType: row.CaeType || row.CaseType || row['Case Type'] || '',
   };
 }
 
@@ -177,7 +178,7 @@ function findColumn(sheet, ...labels) {
 function nextClientId(sheet) {
   let largest = 0;
   for (let rowNumber = HEADER_ROW + 1; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
-    const value = cellText(sheet.getRow(rowNumber).getCell(findColumn(sheet, 'ID No.')));
+    const value = cellText(sheet.getRow(rowNumber).getCell(findColumn(sheet, 'ID No.', 'ClientID', 'Client ID')));
     const match = value.match(/^CL-(\d+)$/i);
     if (match) largest = Math.max(largest, Number(match[1]));
   }
@@ -415,12 +416,15 @@ async function addClientToWorkbook(filePath, input) {
   const daysUntilNextContact = nextContact ? Math.round((nextContact - createdOn) / 86400000) : '';
   const masterRow = appendByHeaders(master, {
     'ID No.': clientId,
+    ClientID: clientId,
     'Client Name': String(input.name ?? '').trim(),
+    ClientName: String(input.name ?? '').trim(),
     Email: email,
     PHONE: String(input.phone ?? '').trim(),
     'Translator Needed': input.translator,
     'Date Onboarded': dateFromInput(input.onboardingDate) || createdOn,
     'Meeting Frequency': input.frequency,
+    CaeType: input.caseType,
     'Date of Interview': dateFromInput(input.interviewDate),
     'Date Contacted': dateFromInput(input.lastContactDate),
     'Outcome ': input.outcome,
@@ -452,6 +456,7 @@ async function addClientToWorkbook(filePath, input) {
   return {
     id: clientId,
     name: String(input.name ?? '').trim(),
+    caseType: input.caseType || '',
     email,
     phone: String(input.phone ?? '').trim(),
     translator: input.translator || '',
@@ -472,7 +477,7 @@ async function updateClientInWorkbook(filePath, clientId, input) {
   const workbook = await loadWorkbook(filePath);
   const master = workbook.getWorksheet(MASTER_SHEET);
   if (!master) throw new Error('The workbook must contain a MasterData sheet.');
-  const idColumn = findColumn(master, 'ID No.');
+  const idColumn = findColumn(master, 'ID No.', 'ClientID', 'Client ID');
   let rowNumber = 0;
   for (let currentRow = HEADER_ROW + 1; currentRow <= master.actualRowCount; currentRow += 1) {
     if (cellText(master.getRow(currentRow).getCell(idColumn)) === clientId) rowNumber = currentRow;
@@ -489,11 +494,13 @@ async function updateClientInWorkbook(filePath, clientId, input) {
 
   const values = [
     ['Client Name', String(input.name ?? '').trim()],
+    ['ClientName', String(input.name ?? '').trim()],
     ['Email', email],
     ['PHONE', String(input.phone ?? '').trim()],
     ['Translator Needed', String(input.translator ?? '').trim()],
     ['Date Onboarded', dateFromInput(input.onboardingDate) || ''],
     ['Meeting Frequency', String(input.frequency ?? '').trim()],
+    ['CaeType', String(input.caseType ?? '').trim()],
     ['Date of Interview', dateFromInput(input.interviewDate) || ''],
     ['Date Contacted', dateFromInput(input.lastContactDate) || ''],
     ['Outcome ', String(input.outcome ?? '').trim()],
@@ -515,7 +522,7 @@ async function completeFollowUpInWorkbook(filePath, clientId) {
   const workbook = await loadWorkbook(filePath);
   const master = workbook.getWorksheet(MASTER_SHEET);
   if (!master) throw new Error('The workbook must contain a MasterData sheet.');
-  const idColumn = findColumn(master, 'ID No.');
+  const idColumn = findColumn(master, 'ID No.', 'ClientID', 'Client ID');
   const nextContactColumn = findColumn(master, 'Next date of Contact');
   let rowNumber = 0;
   for (let currentRow = HEADER_ROW + 1; currentRow <= master.actualRowCount; currentRow += 1) {

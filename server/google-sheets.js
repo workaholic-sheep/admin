@@ -4,6 +4,10 @@ import { mapMasterData } from './workbook.js';
 const SHEET_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const normalize = (value) => String(value ?? '').trim().toLowerCase();
 
+function quoteSheetName(name) {
+  return `'${name.replaceAll("'", "''")}'`;
+}
+
 function parseDateFormula(value) {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return match ? `=DATE(${Number(match[1])},${Number(match[2])},${Number(match[3])})` : '';
@@ -31,6 +35,7 @@ function mappedClient(headers, values) {
     client[field] = String(client[field] ?? '');
   }
   client.daysRemaining = String(client.daysRemaining ?? '');
+  client.caseType = String(client.caseType ?? '');
   return client;
 }
 
@@ -62,8 +67,7 @@ export function createGoogleSheetStore({
   serviceAccountEmail,
   privateKey,
 }, api = google) {
-  const quotedSheet = `'${sheetName.replaceAll("'", "''")}'`;
-  const range = `${quotedSheet}!A:P`;
+  let activeSheetName = '';
   let queuedWrite = Promise.resolve();
 
   function getSheetsClient() {
@@ -80,15 +84,53 @@ export function createGoogleSheetStore({
 
   async function getRows() {
     const sheets = getSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range,
-      valueRenderOption: 'UNFORMATTED_VALUE',
-      dateTimeRenderOption: 'SERIAL_NUMBER',
-    });
-    const values = response.data.values || [];
-    if (!values.length) throw new Error(`The ${sheetName} tab is empty or unavailable.`);
-    return { sheets, headers: values[0].map((header) => String(header ?? '')), rows: values.slice(1) };
+    const readSheet = async (targetSheet) => {
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${quoteSheetName(targetSheet)}!A:P`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+        dateTimeRenderOption: 'SERIAL_NUMBER',
+      });
+      const values = response.data.values || [];
+      if (!values.length) return null;
+      return { headers: values[0].map((header) => String(header ?? '')), rows: values.slice(1) };
+    };
+
+    if (activeSheetName) {
+      const data = await readSheet(activeSheetName);
+      if (!data) throw new Error(`The ${activeSheetName} tab is empty or unavailable.`);
+      return { sheets, sheetName: activeSheetName, quotedSheet: quoteSheetName(activeSheetName), range: `${quoteSheetName(activeSheetName)}!A:P`, ...data };
+    }
+
+    const hasCaseType = (data) => Boolean(data?.headers.some((header) => ['caetype', 'casetype', 'case type'].includes(normalize(header))));
+    let data;
+    let configuredData;
+    let configuredError;
+    const candidates = [...new Set(['MasterData(Klievont)', sheetName])];
+    for (const candidate of candidates) {
+      let candidateData;
+      try {
+        candidateData = await readSheet(candidate);
+      } catch (error) {
+        if (normalize(candidate) === normalize(sheetName)) configuredError = error;
+        continue;
+      }
+      if (!candidateData) continue;
+      if (normalize(candidate) === normalize(sheetName)) configuredData = candidateData;
+      if (normalize(candidate) === normalize('MasterData(Klievont)') && hasCaseType(candidateData)) {
+        activeSheetName = candidate;
+        data = candidateData;
+        break;
+      }
+    }
+
+    if (!activeSheetName && configuredData) {
+      activeSheetName = sheetName;
+      data = configuredData;
+    }
+    if (!activeSheetName) throw configuredError || new Error(`The ${sheetName} tab is empty or unavailable.`);
+    if (!data) throw new Error(`The ${activeSheetName} tab is empty or unavailable.`);
+    return { sheets, sheetName: activeSheetName, quotedSheet: quoteSheetName(activeSheetName), range: `${quoteSheetName(activeSheetName)}!A:P`, ...data };
   }
 
   async function list() {
@@ -146,7 +188,7 @@ export function createGoogleSheetStore({
   }
 
   async function appendClient(input) {
-    const { sheets, headers, rows } = await getRows();
+    const { sheets, headers, rows, range } = await getRows();
     const email = String(input.email ?? '').trim();
     const clients = rows.map((row) => mappedClient(headers, row));
     if (email && clients.some((client) => normalize(client.email) === normalize(email))) {
@@ -170,12 +212,15 @@ export function createGoogleSheetStore({
     const dateFormula = parseDateFormula;
 
     put('ID No.', clientId);
+    put('ClientID', clientId);
     put('Client Name', String(input.name ?? '').trim());
+    put('ClientName', String(input.name ?? '').trim());
     put('Email', email);
     put('PHONE', String(input.phone ?? '').trim());
     put('Translator Needed', input.translator || 'No');
     putFormula('Date Onboarded', dateFormula(input.onboardingDate) || '=TODAY()');
     put('Meeting Frequency', input.frequency || '');
+    put('CaeType', input.caseType || '');
     putFormula('Date of Interview', dateFormula(input.interviewDate));
     putFormula('Date Contacted', dateFormula(input.lastContactDate));
     put('Outcome', input.outcome || '');
@@ -198,6 +243,7 @@ export function createGoogleSheetStore({
     return {
       id: clientId,
       name: String(input.name ?? '').trim(),
+      caseType: input.caseType || '',
       email,
       phone: String(input.phone ?? '').trim(),
       translator: input.translator || 'No',
@@ -217,8 +263,8 @@ export function createGoogleSheetStore({
   }
 
   async function completeFollowUp(clientId) {
-    const { sheets, headers, rows } = await getRows();
-    const idIndex = headers.findIndex((header) => normalize(header) === normalize('ID No.'));
+    const { sheets, headers, rows, quotedSheet } = await getRows();
+    const idIndex = headers.findIndex((header) => ['id no.', 'clientid', 'client id'].includes(normalize(header)));
     const nextContactIndex = headers.findIndex((header) => normalize(header) === normalize('Next date of Contact'));
     const rowIndex = rows.findIndex((row) => String(row[idIndex] ?? '') === clientId);
     if (rowIndex < 0) throw new Error('Client not found.');
@@ -240,9 +286,9 @@ export function createGoogleSheetStore({
   }
 
   async function updateClient(clientId, input) {
-    const { sheets, headers, rows } = await getRows();
+    const { sheets, headers, rows, quotedSheet } = await getRows();
     const indexes = new Map(headers.map((header, index) => [normalize(header), index]));
-    const idIndex = indexes.get(normalize('ID No.'));
+    const idIndex = indexes.get(normalize('ID No.')) ?? indexes.get(normalize('ClientID')) ?? indexes.get(normalize('Client ID'));
     const rowIndex = rows.findIndex((row) => String(row[idIndex] ?? '') === clientId);
     if (rowIndex < 0) throw new Error('Client not found.');
 
@@ -267,11 +313,13 @@ export function createGoogleSheetStore({
     const putDate = (header, value) => put(header, parseDateFormula(value), true);
 
     put('Client Name', input.name);
+    put('ClientName', input.name);
     put('Email', email);
     put('PHONE', input.phone);
     put('Translator Needed', input.translator);
     putDate('Date Onboarded', input.onboardingDate);
     put('Meeting Frequency', input.frequency);
+    put('CaeType', input.caseType);
     putDate('Date of Interview', input.interviewDate);
     putDate('Date Contacted', input.lastContactDate);
     put('Outcome ', input.outcome);
