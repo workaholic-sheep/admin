@@ -15,7 +15,6 @@ import {
   EyeOff,
   FileSpreadsheet,
   LayoutDashboard,
-  LockKeyhole,
   LogOut,
   Menu,
   Pencil,
@@ -773,7 +772,7 @@ function LoginScreen({ onAuthenticated }) {
   return (
     <main className="login-screen">
       <section className="login-panel">
-        <div className="login-mark"><LockKeyhole size={19} /></div>
+        <img className="login-logo" src="/logo.png" alt="Company logo" width="96" height="96" />
         <span className="eyebrow">ADMIN PORTAL</span>
         <h1>BBeckford Law</h1>
         <p>Sign in to your client workspace.</p>
@@ -972,13 +971,13 @@ export default function App() {
   const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit' })[page]
     || (resultView === 'court-dates' ? 'Court dates' : resultView.startsWith('case:') ? `${resultView.slice('case:'.length)} clients` : ({ payments: 'Payment list', 'follow-ups': 'Upcoming follow-ups', 'follow-ups-week': 'Follow-ups this week', clients: 'Client roster' })[resultView])
     || 'Overview';
-  if (authStatus === 'checking') return <main className="login-screen"><div className="login-mark"><LockKeyhole size={19} /></div></main>;
+  if (authStatus === 'checking') return <main className="login-screen"><img className="login-mark" src="/logo.png" alt="Loading" width="48" height="48" /></main>;
   if (authStatus !== 'authenticated') return <LoginScreen onAuthenticated={() => setAuthStatus('authenticated')} />;
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#dashboard" onClick={(event) => { event.preventDefault(); setPage('dashboard'); }}><span className="brand-mark"><span /><span /><span /></span><span className="brand-name">BBeckford Law<span>ADMIN PORTAL</span></span></a>
+        <a className="brand" href="#dashboard" onClick={(event) => { event.preventDefault(); setPage('dashboard'); }}><img className="brand-mark" src="/logo.png" alt="" width="36" height="36" /><span className="brand-name">BBeckford Law<span>ADMIN PORTAL</span></span></a>
         <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><button className={`nav-item ${page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates') ? 'active' : ''}`} onClick={() => setPage('clients')}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button></div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>

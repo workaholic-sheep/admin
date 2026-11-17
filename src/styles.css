@@ -28,11 +28,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .app-shell { min-height: 100vh; }
 .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 5; display: flex; flex-direction: column; width: 236px; padding: 28px 17px 18px; background: #fff; border-right: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 11px; padding: 0 10px; color: var(--ink); text-decoration: none; }
-.brand-mark { display: flex; align-items: flex-end; gap: 3px; width: 29px; height: 29px; padding: 5px; background: #e5efe7; border-radius: 8px; }
-.brand-mark span { display: block; width: 5px; border-radius: 4px; background: var(--forest); }
-.brand-mark span:nth-child(1) { height: 10px; }
-.brand-mark span:nth-child(2) { height: 16px; background: #c56e56; }
-.brand-mark span:nth-child(3) { height: 12px; background: #759681; }
+.brand-mark { flex: none; width: 36px; height: 36px; border: 1px solid #e3e7e3; border-radius: 8px; background: #fff; object-fit: contain; }
 .brand-name { font-size: 17px; font-weight: 700; letter-spacing: 0; line-height: 1.1; }
 .brand-name > span { display: block; margin-top: 4px; color: #879289; font-size: 8px; font-weight: 700; letter-spacing: 1.1px; }
 .sidebar-section { display: grid; gap: 4px; margin-top: 58px; }
@@ -263,7 +259,8 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
 .toast > span { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: #e8f1e9; color: #51805b; }
 .login-screen { display: grid; min-height: 100vh; place-items: center; padding: 24px; background: radial-gradient(ellipse at 16% 12%, #e5eee4 0, transparent 36%), radial-gradient(ellipse at 90% 86%, #f3e6dc 0, transparent 32%), #f4f6f3; }
 .login-panel { width: min(390px, 100%); padding: 34px; border: 1px solid #e2e8e1; border-radius: 7px; background: #fff; box-shadow: 0 18px 55px rgb(39 61 45 / 8%); }
-.login-mark { display: grid; width: 40px; height: 40px; margin-bottom: 22px; place-items: center; border-radius: 7px; background: #e7efe7; color: var(--forest); }
+.login-mark { width: 48px; height: 48px; border-radius: 8px; background: #fff; object-fit: contain; }
+.login-logo { display: block; width: 96px; height: 96px; margin: 0 0 18px -8px; }
 .login-panel h1 { margin: 8px 0 5px; color: #2c4034; font-family: 'DM Serif Display', Georgia, serif; font-size: 31px; font-weight: 400; letter-spacing: 0; }
 .login-panel > p { margin: 0 0 25px; color: #7b877f; font-size: 12px; }
 .login-panel form { display: grid; gap: 14px; }
@@ -285,7 +282,7 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
   body { min-width: 320px; }
   .sidebar { position: sticky; inset: 0 0 auto; flex-direction: row; align-items: center; justify-content: space-between; width: auto; height: 58px; padding: 0 15px; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand { padding: 0; }
-  .brand-mark { width: 26px; height: 26px; }
+  .brand-mark { width: 30px; height: 30px; }
   .brand-name { font-size: 15px; }
   .brand-name > span { font-size: 7px; }
   .sidebar-section { display: flex; gap: 4px; margin: 0 0 0 auto; padding-right: 6px; }
