@@ -20,7 +20,7 @@ export const DECISIONS = ['Pending', 'Approved', 'Denied'];
 export const WORK_PERMIT_HEADERS = [
   'ClientID', 'ClientName', 'OriginalNote', 'Section',
   'FilingDate', 'ClockStatus', 'PausedSince', 'PausedDays', 'TrackingToken',
-  'I765FiledDate', 'ReceiptNumber', 'EADDecision', 'EADApprovedDate', 'EADExpiryDate',
+  'ANumber', 'EADDecision', 'EADApprovedDate', 'EADExpiryDate',
 ];
 
 export class WorkPermitError extends Error {
@@ -35,12 +35,19 @@ const isDateKey = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(
 
 const dateOrBlank = (value) => (isDateKey(text(value)) ? text(value) : '');
 
+// A-Numbers are 8 or 9 digits, shown EOIR-style as 245-943-700 (8 digits get a leading 0).
+export function formatANumber(value) {
+  const digits = String(value ?? '').replace(/^\s*A/i, '').replace(/[\s-]/g, '');
+  if (!/^\d{8,9}$/.test(digits)) return '';
+  const nine = digits.padStart(9, '0');
+  return `${nine.slice(0, 3)}-${nine.slice(3, 6)}-${nine.slice(6)}`;
+}
+
 export function mapWorkPermit(row) {
   const pausedDays = Number.parseInt(text(row.PausedDays), 10);
   const decision = DECISIONS.find((value) => value.toLowerCase() === text(row.EADDecision).toLowerCase()) || 'Pending';
   return {
-    i765FiledDate: dateOrBlank(row.I765FiledDate),
-    receiptNumber: text(row.ReceiptNumber),
+    aNumber: formatANumber(row.ANumber) || text(row.ANumber),
     decision,
     approvedDate: dateOrBlank(row.EADApprovedDate),
     expiryDate: dateOrBlank(row.EADExpiryDate),
@@ -67,8 +74,7 @@ export function workPermitCells(record) {
     PausedSince: record.clockStatus === 'Paused' ? record.pausedSince : '',
     PausedDays: record.pausedDays ? String(record.pausedDays) : '',
     TrackingToken: record.trackingToken,
-    I765FiledDate: record.i765FiledDate,
-    ReceiptNumber: record.receiptNumber,
+    ANumber: record.aNumber,
     EADDecision: record.decision === 'Pending' ? '' : record.decision,
     EADApprovedDate: record.decision === 'Approved' ? record.approvedDate : '',
     EADExpiryDate: record.decision === 'Approved' ? record.expiryDate : '',
@@ -98,14 +104,13 @@ function asylumClock(record, today) {
 
 /*
  * Works out where a client is in the asylum work permit process and what to count down to.
- * stage: not-started | waiting | ready-to-file | filed | active | renewal-due | expired | denied
+ * stage: not-started | waiting | ready-to-file | active | renewal-due | expired | denied
  * countdown: { days, date, of, label } — `of` is the length of the span the ring shows.
+ * This object is sent to the client's public page, so it must never include the A-Number or notes.
  */
 export function workPermitStatus(record, today = centralToday()) {
   const base = {
     filingDate: record.filingDate,
-    i765FiledDate: record.i765FiledDate,
-    receiptNumber: record.receiptNumber,
     approvedDate: record.decision === 'Approved' ? record.approvedDate : '',
     expiryDate: record.decision === 'Approved' ? record.expiryDate : '',
     fileAfterDays: FILE_AFTER_DAYS,
@@ -128,17 +133,17 @@ export function workPermitStatus(record, today = centralToday()) {
     return { ...base, stage: 'active', label: 'Work permit active', countdown };
   }
 
-  if (record.i765FiledDate) {
-    const daysPending = Math.max(0, dayNumber(today) - dayNumber(record.i765FiledDate));
-    const filed = { ...base, stage: 'filed', label: 'I-765 pending', daysPending };
-    if (clock && clock.counted < APPROVE_AFTER_DAYS) {
-      return { ...filed, countdown: { days: APPROVE_AFTER_DAYS - clock.counted, date: clock.dateForDay(APPROVE_AFTER_DAYS), of: APPROVE_AFTER_DAYS, counted: clock.counted, label: `until USCIS can approve (day ${APPROVE_AFTER_DAYS})` } };
-    }
-    return filed;
-  }
-
   if (!clock) return { ...base, stage: 'not-started', label: "Needs Init Asylum Rec'd Date" };
-  if (clock.counted >= FILE_AFTER_DAYS) return { ...base, stage: 'ready-to-file', label: 'Ready to file I-765' };
+  // From day 150 the I-765 can be filed; count down to day 180, the earliest USCIS can approve.
+  if (clock.counted >= FILE_AFTER_DAYS) {
+    if (clock.counted >= APPROVE_AFTER_DAYS) return { ...base, stage: 'ready-to-file', label: `Eligible – past day ${APPROVE_AFTER_DAYS}` };
+    return {
+      ...base,
+      stage: 'ready-to-file',
+      label: 'Eligible to file I-765',
+      countdown: { days: APPROVE_AFTER_DAYS - clock.counted, date: clock.dateForDay(APPROVE_AFTER_DAYS), of: APPROVE_AFTER_DAYS, counted: clock.counted, label: `until USCIS can approve (day ${APPROVE_AFTER_DAYS})` },
+    };
+  }
   return {
     ...base,
     stage: 'waiting',
@@ -226,7 +231,7 @@ export function createWorkPermitWorkbookStore(filePath) {
       columns: WORK_PERMIT_HEADERS.map((name) => ({ name, filterButton: true })),
       rows: records.map((record) => { const cells = workPermitCells(record); return WORK_PERMIT_HEADERS.map((header) => cells[header]); }),
     });
-    sheet.columns = [10, 30, 70, 10, 12, 12, 12, 11, 36, 13, 16, 12, 15, 14].map((width) => ({ width }));
+    sheet.columns = [10, 30, 70, 10, 12, 12, 12, 11, 36, 14, 12, 15, 14].map((width) => ({ width }));
     sheet.views = [{ state: 'frozen', ySplit: 1 }];
     try {
       await workbook.xlsx.writeFile(filePath);

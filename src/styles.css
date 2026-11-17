@@ -168,16 +168,37 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
 .client-name-cell small { display: flex; align-items: center; gap: 6px; overflow: hidden; max-width: 255px; color: #919b94; font-size: 9px; text-overflow: ellipsis; }
 .client-name-cell small i { width: 3px; height: 3px; flex: none; border-radius: 50%; background: #a4aea6; }
 .muted { color: #a4aea6; }
-.work-permit-table td:nth-child(5) { min-width: 230px; }
-.work-permit-table td:nth-child(6) { min-width: 210px; white-space: normal; }
-.ead-clock { display: grid; gap: 6px; margin: 0; padding: 8px 10px; border: 1px solid #e3e8ef; border-radius: 4px; background: #f6f8fb; }
-.ead-clock > div { display: grid; grid-template-columns: 140px auto; align-items: baseline; gap: 10px; }
+/* Work permit cards: four areas side by side, wrapping to two rows and then one column as space shrinks. */
+.permit-list { container-type: inline-size; margin: 0; padding: 0; list-style: none; }
+.permit-card { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.05fr) minmax(0, 1fr) auto; align-items: start; gap: 14px 20px; padding: 16px 18px; border-top: 1px solid #edf0ed; transition: background .12s ease; }
+.permit-card:first-child { border-top: 0; }
+.permit-card:hover { background: #fbfcfa; }
+.permit-client { display: grid; gap: 4px; min-width: 0; }
+.permit-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.permit-title strong { color: #26392e; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.permit-meta { color: #8a968e; font-size: 10px; }
+.permit-note { margin: 4px 0 0; color: #5d6d63; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.permit-actions { display: grid; gap: 6px; }
+.permit-actions .button { justify-content: flex-start; min-height: 30px; height: 30px; padding: 0 11px; font-size: 10px; white-space: nowrap; }
+.permit-actions .button:disabled { opacity: .45; cursor: not-allowed; }
+.permit-empty { list-style: none; }
+@container (max-width: 980px) {
+  .permit-card { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); }
+  .permit-actions { display: flex; flex-wrap: wrap; grid-column: 1 / -1; justify-content: flex-end; }
+}
+@container (max-width: 640px) {
+  .permit-card { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .permit-actions { justify-content: flex-start; }
+}
+.ead-clock { display: grid; gap: 6px; margin: 0; padding: 9px 11px; border: 1px solid #e3e8ef; border-radius: 4px; background: #f6f8fb; }
+.ead-clock > div { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 4px 10px; }
+.ead-clock dt { white-space: nowrap; }
 .ead-clock dt { color: #1f2a37; font-size: 10px; font-weight: 700; }
 .ead-clock dd { margin: 0; color: #3b4652; font-size: 10px; }
 .ead-clock.is-stopped dt:first-child, .ead-clock.is-stopped > div:first-child dd { color: #8f6224; }
 .status-danger { background: #f9e9e5; color: #a5442f; }
 .status-info { background: #e8eff4; color: #46708a; }
-.permit-status { display: grid; justify-items: start; gap: 6px; min-width: 190px; }
+.permit-status { display: grid; justify-items: start; gap: 6px; min-width: 0; }
 .permit-status .clock-bar { width: 100%; }
 .permit-status small { color: #7b877f; font-size: 9px; line-height: 1.4; }
 .permit-status.tone-caution small, .permit-status.tone-danger small { font-weight: 600; }
@@ -190,9 +211,6 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
 .tone-danger .clock-bar i { background: #c0634c; }
 .form-grid > .form-section-title { margin: 10px 0 0; }
 .form-grid > .form-section-title h3 { margin: 0; font-size: 12px; }
-.row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.row-actions .button { height: 32px; padding: 0 10px; font-size: 10px; white-space: nowrap; }
-.row-actions .button:disabled { opacity: .45; cursor: not-allowed; }
 .clock-button.is-paused { border-color: #e7cfa6; background: #fbf4e8; color: #8f6224; }
 .share-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px; padding: 14px 16px; animation: appear .25s ease both; }
 .share-panel > div { display: grid; flex: 1 1 240px; gap: 3px; }
@@ -238,9 +256,6 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
 .court-results-table td small { margin-top: 2px; color: #a0aaa2; font-size: 9px; }
 .court-results-table th:last-child, .court-results-table td:last-child { width: auto; }
 .client-table tbody tr.row-static { cursor: default; }
-.work-permit-table tbody tr:not(:has(.table-empty)) { cursor: default; }
-.work-permit-table td:nth-child(3) { min-width: 260px; white-space: normal; line-height: 1.45; }
-.work-permit-table th:last-child, .work-permit-table td:last-child { width: auto; padding-right: 15px; }
 .status { display: inline-flex; align-items: center; gap: 6px; padding: 4px 7px; border-radius: 20px; font-size: 9px; font-weight: 600; }
 .status i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .status-positive { background: #eaf2eb; color: #4d7b58; }
@@ -363,7 +378,9 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
   .icon-button { width: 32px; height: 32px; }
   .top-add { min-height: 32px; padding: 0 9px; font-size: 10px; }
   .page-content { padding: 25px 15px 18px; }
-  .welcome-row { align-items: flex-start; }
+  .welcome-row { flex-wrap: wrap; align-items: flex-start; }
+  .welcome-row > div { min-width: 0; }
+  .topbar-actions { min-width: 0; }
   .welcome-row h1 { font-size: 30px; }
   .welcome-row .button-secondary { align-self: flex-end; min-height: 32px; padding: 0 8px; font-size: 10px; white-space: nowrap; }
   .metric-grid { gap: 8px; }
@@ -405,6 +422,12 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
   .field-wide { grid-column: auto; }
   .welcome-row .button-secondary { max-width: 112px; white-space: normal; }
   .welcome-row .button-secondary svg { flex: none; }
+}
+@media (max-width: 560px) {
+  .topbar .central-clock, .topbar .sync-state { display: none; }
+  /* Five tabs plus the firm name no longer fit; keep the logo and let the tab icons scroll on their own. */
+  .sidebar .brand-name { display: none; }
+  .sidebar-section { min-width: 0; overflow-x: auto; scrollbar-width: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .metric { transition: none; }

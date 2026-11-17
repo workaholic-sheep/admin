@@ -36,23 +36,17 @@ function stageView(status) {
           : `You can apply for a work permit once your asylum case reaches ${status.fileAfterDays} days. Estimated date: ${longDate(countdown.date)}.`,
       };
     case 'ready-to-file':
-      return {
-        tone: 'positive',
-        headline: `You've reached ${status.fileAfterDays} days`,
-        body: 'You can now apply for a work permit. Our office is preparing your application (Form I-765).',
-      };
-    case 'filed':
       return countdown
         ? {
-          tone: 'info',
+          tone: 'positive',
           ring: { days: countdown.days, unit: 'days to go', fraction: countdown.counted / countdown.of },
-          headline: 'Your work permit application has been filed',
-          body: `Filed on ${longDate(status.i765FiledDate)}. USCIS can approve it after day ${status.approveAfterDays} of your asylum case${countdown.date ? `, about ${longDate(countdown.date)}` : ''}.`,
+          headline: `You've reached ${status.fileAfterDays} days`,
+          body: `You can now apply for a work permit (Form I-765). USCIS can approve it after day ${status.approveAfterDays} of your asylum case${countdown.date ? `, about ${longDate(countdown.date)}` : ''}.`,
         }
         : {
           tone: 'info',
-          headline: 'Waiting for a decision from USCIS',
-          body: `Your work permit application was filed on ${longDate(status.i765FiledDate)} and has been pending for ${status.daysPending} days. We'll let you know as soon as there's a decision.`,
+          headline: `You've passed day ${status.approveAfterDays}`,
+          body: "USCIS can now approve a work permit for you. We'll let you know as soon as there's a decision.",
         };
     case 'active':
       return countdown
@@ -123,8 +117,6 @@ export default function TrackPage({ token }) {
             {details.filingDate && <div><dt>Asylum application filed</dt><dd>{longDate(details.filingDate)}</dd></div>}
             {details.clock && details.stage !== 'active' && details.stage !== 'renewal-due' && details.stage !== 'expired' && <div><dt>Days on your asylum clock</dt><dd>{details.clock.counted}</dd></div>}
             {details.clock?.pausedDays > 0 && <div><dt>Days paused</dt><dd>{details.clock.pausedDays}</dd></div>}
-            {details.i765FiledDate && <div><dt>Work permit application filed</dt><dd>{longDate(details.i765FiledDate)}</dd></div>}
-            {details.receiptNumber && <div><dt>USCIS receipt number</dt><dd>{details.receiptNumber}</dd></div>}
             {details.approvedDate && <div><dt>Approved</dt><dd>{longDate(details.approvedDate)}</dd></div>}
             {details.expiryDate && <div><dt>Valid until</dt><dd>{longDate(details.expiryDate)}</dd></div>}
           </dl>

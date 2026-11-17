@@ -8,7 +8,7 @@ import { createSessionAuth } from './session-auth.js';
 import { createReminderWorkbookStore } from './payment-reminders.js';
 import { createWorkbookStore } from './workbook.js';
 import {
-  DECISIONS, WorkPermitError, createWorkPermitWorkbookStore, workPermitStatus, isTrackingToken, newTrackingToken, pauseClock, resumeClock,
+  DECISIONS, WorkPermitError, createWorkPermitWorkbookStore, formatANumber, workPermitStatus, isTrackingToken, newTrackingToken, pauseClock, resumeClock,
 } from './work-permits.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -162,10 +162,11 @@ function workPermitInput(body = {}) {
   const note = String(body.note || '').trim();
   const section = String(body.section || 'Regular').trim();
   const pausedDays = Number(body.pausedDays || 0);
-  const receiptNumber = String(body.receiptNumber || '').trim().toUpperCase();
+  const rawANumber = String(body.aNumber || '').trim();
+  const aNumber = formatANumber(rawANumber);
   const decision = DECISIONS.includes(body.decision) ? body.decision : 'Pending';
   const dates = {};
-  for (const [field, label] of [['filingDate', "Init Asylum Rec'd Date"], ['i765FiledDate', 'I-765 filing date'], ['approvedDate', 'approval date'], ['expiryDate', 'expiry date']]) {
+  for (const [field, label] of [['filingDate', "Init Asylum Rec'd Date"], ['approvedDate', 'approval date'], ['expiryDate', 'expiry date']]) {
     const value = String(body[field] || '').trim();
     if (value && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`)))) return { error: `Enter a valid ${label}.` };
     dates[field] = value;
@@ -175,12 +176,10 @@ function workPermitInput(body = {}) {
   if (note.length > 2000) return { error: 'Note must be 2,000 characters or fewer.' };
   if (!['Regular', 'Pending'].includes(section)) return { error: 'Section must be Regular or Pending.' };
   if (!Number.isInteger(pausedDays) || pausedDays < 0 || pausedDays > 3650) return { error: 'Days paused must be a whole number of 0 or more.' };
-  if (receiptNumber && !/^[A-Z0-9]{5,20}$/.test(receiptNumber)) return { error: 'Receipt number should be letters and numbers only, like IOE0123456789.' };
-  if (dates.i765FiledDate && dates.filingDate && dates.i765FiledDate < dates.filingDate) return { error: 'The I-765 cannot be filed before the asylum application.' };
-  if (decision !== 'Pending' && !dates.i765FiledDate) return { error: 'Add the I-765 filing date before recording a decision.' };
+  if (rawANumber && !aNumber) return { error: 'A-Number should be 8 or 9 digits, like 245-943-700.' };
   if (decision === 'Approved' && !dates.expiryDate) return { error: 'Add the card expiry date for an approved work permit.' };
   if (dates.approvedDate && dates.expiryDate && dates.expiryDate <= dates.approvedDate) return { error: 'The expiry date must be after the approval date.' };
-  return { value: { name, note, section, ...dates, pausedDays, receiptNumber, decision } };
+  return { value: { name, note, section, ...dates, pausedDays, aNumber, decision } };
 }
 
 async function requireWorkPermits(response) {
