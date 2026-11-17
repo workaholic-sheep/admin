@@ -3,7 +3,7 @@ import { rateLimit } from 'express-rate-limit';
 import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createGoogleSheetStore } from './google-sheets.js';
+import { SheetSetupError, createGoogleSheetStore } from './google-sheets.js';
 import { createSessionAuth } from './session-auth.js';
 import { createReminderWorkbookStore } from './payment-reminders.js';
 import { createWorkbookStore } from './workbook.js';
@@ -281,6 +281,7 @@ if (process.env.NODE_ENV === 'production') {
 
 app.use((error, _request, response, _next) => {
   console.error(error);
+  if (error instanceof SheetSetupError) return response.status(500).json({ error: error.message });
   const missingFile = String(error?.message || '').match(/^File not found: (.+)$/);
   if (!useGoogleSheets && missingFile) {
     return response.status(500).json({ error: `Workbook not found: ${missingFile[1].split(/[\\/]/).pop()}. Add it to the project folder.` });

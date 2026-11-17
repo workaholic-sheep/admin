@@ -19,6 +19,25 @@ function safeUserText(value) {
   return /^[=+\-@]/.test(text) ? `'${text}` : text;
 }
 
+export class SheetSetupError extends Error {}
+
+// Turns Google API failures into messages that say what to fix in the spreadsheet.
+function explainGoogleError(error, { label, envName, serviceAccountEmail }) {
+  if (error instanceof SheetSetupError) return error;
+  const status = Number(error?.code || error?.response?.status || 0);
+  const detail = String(error?.message || '');
+  if (/not supported for this document/i.test(detail)) {
+    return new SheetSetupError(`The ${label} file is an Excel file stored in Google Drive, which Google's API can't read. Open it in Drive, choose File → Save as Google Sheets, then put the new sheet's ID in ${envName}.`);
+  }
+  if (status === 403) {
+    return new SheetSetupError(`The ${label} spreadsheet isn't shared with the app. Share it with ${serviceAccountEmail} (Viewer or Editor).`);
+  }
+  if (status === 404) {
+    return new SheetSetupError(`The ${label} spreadsheet was not found. Check the ID in ${envName}.`);
+  }
+  return error;
+}
+
 function columnLetters(index) {
   let letters = '';
   while (index > 0) {
@@ -73,6 +92,32 @@ export function createGoogleSheetStore({
 }, api = google) {
   let activeSheetName = '';
   let queuedWrite = Promise.resolve();
+  const resolvedTitles = new Map();
+
+  // Finds the real tab title, ignoring case and stray spaces (e.g. "COURT DATE LIST ").
+  async function resolveTab(sheets, targetSpreadsheetId, wanted, label) {
+    const cacheKey = `${targetSpreadsheetId}|${wanted}`;
+    if (resolvedTitles.has(cacheKey)) return resolvedTitles.get(cacheKey);
+    const { data } = await sheets.spreadsheets.get({ spreadsheetId: targetSpreadsheetId, fields: 'sheets.properties.title' });
+    const titles = (data.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
+    const title = titles.find((candidate) => candidate === wanted)
+      || titles.find((candidate) => normalize(candidate).replace(/\s+/g, ' ') === normalize(wanted).replace(/\s+/g, ' '));
+    if (!title) throw new SheetSetupError(`The ${label} spreadsheet has no tab named "${wanted.trim()}". Tabs found: ${titles.map((name) => `"${name}"`).join(', ') || 'none'}.`);
+    resolvedTitles.set(cacheKey, title);
+    return title;
+  }
+
+  async function readOtherSheet({ targetSpreadsheetId, tab, columns, label, envName, options = {} }) {
+    const sheets = getSheetsClient();
+    try {
+      const title = await resolveTab(sheets, targetSpreadsheetId, tab, label);
+      const response = await sheets.spreadsheets.values.get({ spreadsheetId: targetSpreadsheetId, range: `${quoteSheetName(title)}!${columns}`, ...options });
+      return response.data.values || [];
+    } catch (error) {
+      resolvedTitles.delete(`${targetSpreadsheetId}|${tab}`);
+      throw explainGoogleError(error, { label, envName, serviceAccountEmail });
+    }
+  }
 
   function getSheetsClient() {
     if (!spreadsheetId || !serviceAccountEmail || !privateKey) {
@@ -147,14 +192,14 @@ export function createGoogleSheetStore({
 
   async function listCourtDates() {
     if (!courtSpreadsheetId) return [];
-    const sheets = getSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: courtSpreadsheetId,
-      range: `'${courtSheetName.replaceAll("'", "''")}'!B:L`,
-      valueRenderOption: 'UNFORMATTED_VALUE',
-      dateTimeRenderOption: 'SERIAL_NUMBER',
+    const values = await readOtherSheet({
+      targetSpreadsheetId: courtSpreadsheetId,
+      tab: courtSheetName,
+      columns: 'B:L',
+      label: 'court date',
+      envName: 'GOOGLE_COURT_SHEET_ID',
+      options: { valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'SERIAL_NUMBER' },
     });
-    const values = response.data.values || [];
     if (!values.length) return [];
     const rawHeaders = values[0].map((header) => String(header ?? '').trim());
     const headers = rawHeaders.map((header) => normalize(header));
@@ -408,13 +453,15 @@ export function createGoogleSheetStore({
   }
 
   async function listWorkPermits() {
-    const sheets = getSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: workPermitSpreadsheetId,
-      range: `${quoteSheetName(workPermitSheetName)}!A:Z`,
-      valueRenderOption: 'FORMATTED_VALUE',
+    const values = await readOtherSheet({
+      targetSpreadsheetId: workPermitSpreadsheetId,
+      tab: workPermitSheetName,
+      columns: 'A:Z',
+      label: 'work permit',
+      envName: 'GOOGLE_WORK_PERMIT_SHEET_ID',
+      options: { valueRenderOption: 'FORMATTED_VALUE' },
     });
-    const [headerRow = [], ...rows] = response.data.values || [];
+    const [headerRow = [], ...rows] = values;
     const headers = headerRow.map((header) => String(header ?? '').trim());
     return rows
       .map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ''])))
