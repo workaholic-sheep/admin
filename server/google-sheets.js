@@ -363,7 +363,7 @@ export function createGoogleSheetStore({
     const sheets = getSheetsClient();
     let response;
     try {
-      response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quotedReminderSheet}!A:E`, valueRenderOption: 'FORMATTED_VALUE' });
+      response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quotedReminderSheet}!A:F`, valueRenderOption: 'FORMATTED_VALUE' });
     } catch (error) {
       if (isMissingTab(error)) return [];
       throw error;
@@ -377,9 +377,14 @@ export function createGoogleSheetStore({
 
   async function ensureReminderSheet(sheets) {
     const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties.title' });
-    if (data.sheets?.some((sheet) => sheet.properties?.title === reminderSheetName)) return;
-    await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: reminderSheetName } } }] } });
-    await sheets.spreadsheets.values.update({ spreadsheetId, range: `${quotedReminderSheet}!A1:E1`, valueInputOption: 'RAW', requestBody: { values: [REMINDER_HEADERS] } });
+    if (!data.sheets?.some((sheet) => sheet.properties?.title === reminderSheetName)) {
+      await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: reminderSheetName } } }] } });
+    }
+    const { data: header } = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quotedReminderSheet}!A1:F1` });
+    const current = (header.values?.[0] || []).map((value) => String(value ?? '').trim());
+    if (REMINDER_HEADERS.some((name, index) => current[index] !== name)) {
+      await sheets.spreadsheets.values.update({ spreadsheetId, range: `${quotedReminderSheet}!A1:F1`, valueInputOption: 'RAW', requestBody: { values: [REMINDER_HEADERS] } });
+    }
   }
 
   const strip = ({ rowNumber, ...reminder }) => reminder;
@@ -388,7 +393,7 @@ export function createGoogleSheetStore({
     const sheets = getSheetsClient();
     await ensureReminderSheet(sheets);
     const reminder = { ...input, id: nextReminderId(await listReminders()) };
-    await sheets.spreadsheets.values.append({ spreadsheetId, range: `${quotedReminderSheet}!A:E`, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [reminderRow(reminder)] } });
+    await sheets.spreadsheets.values.append({ spreadsheetId, range: `${quotedReminderSheet}!A:F`, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [reminderRow(reminder)] } });
     return reminder;
   }
 
@@ -396,8 +401,9 @@ export function createGoogleSheetStore({
     const sheets = getSheetsClient();
     const existing = (await listReminders()).find((reminder) => reminder.id === id);
     if (!existing) throw new Error('Reminder not found.');
+    await ensureReminderSheet(sheets);
     const reminder = { ...input, id };
-    await sheets.spreadsheets.values.update({ spreadsheetId, range: `${quotedReminderSheet}!A${existing.rowNumber}:E${existing.rowNumber}`, valueInputOption: 'RAW', requestBody: { values: [reminderRow(reminder)] } });
+    await sheets.spreadsheets.values.update({ spreadsheetId, range: `${quotedReminderSheet}!A${existing.rowNumber}:F${existing.rowNumber}`, valueInputOption: 'RAW', requestBody: { values: [reminderRow(reminder)] } });
     return reminder;
   }
 

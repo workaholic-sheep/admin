@@ -135,14 +135,16 @@ app.get('/api/work-permits', async (_request, response, next) => {
 
 function reminderInput(body = {}) {
   const name = String(body.name || '').trim();
+  const email = String(body.email || '').trim();
   const responded = body.responded === 'Yes' ? 'Yes' : 'No';
   const response = responded === 'Yes' ? String(body.response || '').trim() : '';
   const respondedAt = responded === 'Yes' ? String(body.respondedAt || '').trim().replace('T', ' ') : '';
   if (!name) return { error: 'Name is required.' };
   if (name.length > 200) return { error: 'Name must be 200 characters or fewer.' };
+  if (email && (email.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return { error: 'Enter a valid email address.' };
   if (response.length > 2000) return { error: 'Response must be 2,000 characters or fewer.' };
   if (respondedAt && !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(respondedAt)) return { error: 'Enter a valid response date and time.' };
-  return { value: { name, responded, response, respondedAt } };
+  return { value: { name, email, responded, response, respondedAt } };
 }
 
 function reminderError(error, response, next) {

@@ -528,7 +528,59 @@ function formatResponseTime(value) {
     .format(new Date(Date.UTC(year, month - 1, day, hour, minute)))} CT`;
 }
 
-const emptyReminder = { name: '', responded: 'No', response: '', respondedAt: '' };
+const emptyReminder = { name: '', email: '', responded: 'No', response: '', respondedAt: '' };
+
+function clientSuggestions(clients, text) {
+  const query = text.trim().toLowerCase();
+  if (!query) return [];
+  const seen = new Set();
+  return clients
+    .filter((client) => client.name && client.name.toLowerCase().includes(query))
+    .filter((client) => {
+      const key = `${client.name.toLowerCase()}|${(client.email || '').toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => Number(!left.name.toLowerCase().startsWith(query)) - Number(!right.name.toLowerCase().startsWith(query)) || left.name.localeCompare(right.name))
+    .slice(0, 8);
+}
+
+function NameSuggest({ value, clients, onChange, onPick }) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const listId = useId();
+  const suggestions = clientSuggestions(clients, value);
+  const showList = open && suggestions.length > 0;
+
+  function pick(client) {
+    onPick(client);
+    setOpen(false);
+  }
+
+  function keyDown(event) {
+    if (!showList) return;
+    if (event.key === 'ArrowDown') { event.preventDefault(); setActive((index) => (index + 1) % suggestions.length); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); setActive((index) => (index - 1 + suggestions.length) % suggestions.length); }
+    else if (event.key === 'Enter') { event.preventDefault(); pick(suggestions[active]); }
+    else if (event.key === 'Escape') setOpen(false);
+  }
+
+  return (
+    <span className="name-suggest">
+      <input
+        name="name" value={value} maxLength={200} placeholder="Start typing a client name" required autoFocus autoComplete="off"
+        role="combobox" aria-expanded={showList} aria-controls={listId} aria-autocomplete="list"
+        aria-activedescendant={showList ? `${listId}-${active}` : undefined}
+        onChange={(event) => { onChange(event.target.value); setOpen(true); setActive(0); }}
+        onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onKeyDown={keyDown}
+      />
+      {showList && <ul className="suggest-list" id={listId} role="listbox">
+        {suggestions.map((client, index) => <li key={`${client.id}-${client.email}`} id={`${listId}-${index}`} role="option" aria-selected={index === active} className={index === active ? 'is-active' : ''} onMouseDown={(event) => { event.preventDefault(); pick(client); }} onMouseEnter={() => setActive(index)}><strong>{client.name}</strong><small>{client.email || 'No email on file'}{client.id ? ` · ${client.id}` : ''}</small></li>)}
+      </ul>}
+    </span>
+  );
+}
 
 function PaymentReminders({ clients }) {
   const [reminders, setReminders] = useState([]);
@@ -540,7 +592,8 @@ function PaymentReminders({ clients }) {
   const [form, setForm] = useState(emptyReminder);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
-  const listId = useId();
+  const trackerEmails = useMemo(() => new Map(clients.filter((client) => client.email).map((client) => [normalizeClientName(client.name), client.email])), [clients]);
+  const emailFor = (reminder) => reminder.email || trackerEmails.get(normalizeClientName(reminder.name)) || '';
 
   useEffect(() => {
     let active = true;
@@ -556,7 +609,7 @@ function PaymentReminders({ clients }) {
 
   function startEdit(reminder) {
     setEditing(reminder ? reminder.id : 'new');
-    setForm(reminder ? { ...emptyReminder, ...reminder, respondedAt: reminder.respondedAt.replace(' ', 'T') } : emptyReminder);
+    setForm(reminder ? { ...emptyReminder, ...reminder, email: emailFor(reminder), respondedAt: reminder.respondedAt.replace(' ', 'T') } : emptyReminder);
     setFormError('');
   }
 
@@ -595,7 +648,7 @@ function PaymentReminders({ clients }) {
   const query = search.trim().toLowerCase();
   const visible = reminders
     .filter((reminder) => filter === 'all' || (filter === 'responded' ? reminder.responded === 'Yes' : reminder.responded !== 'Yes'))
-    .filter((reminder) => !query || [reminder.name, reminder.response].some((value) => value.toLowerCase().includes(query)));
+    .filter((reminder) => !query || [reminder.name, emailFor(reminder), reminder.response].some((value) => value.toLowerCase().includes(query)));
   const empty = loadState === 'loading' ? ['Loading reminders…', '']
     : loadState === 'error' ? ['Could not load reminders', loadError]
       : !reminders.length ? ['No reminders yet', 'Use “Add name” to log each client you reminded.']
@@ -606,7 +659,8 @@ function PaymentReminders({ clients }) {
       <div className="welcome-row roster-heading"><div><span className="eyebrow">PAYMENT REMINDERS · {reminders.length} REMINDED · {respondedCount} RESPONDED · {reminders.length - respondedCount} WAITING</span><h1>November payment reminders</h1><p className="page-subtitle">Track who answered the November payment reminder.</p></div><button className="button button-primary" onClick={() => startEdit(null)} disabled={loadState !== 'ready'}><Plus size={16} />Add name</button></div>
       {editing && <form className="surface reminder-form" onSubmit={save}>
         <div className="form-grid">
-          <label className="field">Name<input name="name" value={form.name} onChange={update} list={listId} maxLength={200} placeholder="Client name" required autoFocus /><datalist id={listId}>{clients.map((client) => <option key={client.id || client.name} value={client.name} />)}</datalist></label>
+          <label className="field">Name<NameSuggest value={form.name} clients={clients} onChange={(name) => setForm((current) => ({ ...current, name }))} onPick={(client) => setForm((current) => ({ ...current, name: client.name, email: client.email || current.email }))} /></label>
+          <label className="field">Email<input type="email" name="email" value={form.email} onChange={update} maxLength={200} placeholder="Filled in when you pick a client" /></label>
           <label className="field">Did they respond?<select name="responded" value={form.responded} onChange={update}><option>No</option><option>Yes</option></select><ChevronDown size={15} /></label>
           {form.responded === 'Yes' && <>
             <label className="field field-wide">What they responded<textarea name="response" value={form.response} onChange={update} rows={3} maxLength={2000} placeholder="Their reply" /></label>
@@ -618,12 +672,12 @@ function PaymentReminders({ clients }) {
       </form>}
       <section className="surface roster-surface">
         <div className="roster-toolbar">
-          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or response" aria-label="Search payment reminders" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, email or response" aria-label="Search payment reminders" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
           <FilterMenu label="Show" value={filter} onChange={setFilter} icon={SlidersHorizontal} options={[{ value: 'all', label: 'Everyone' }, { value: 'responded', label: 'Responded' }, { value: 'waiting', label: 'No response yet' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table reminder-table"><thead><tr><th>Name</th><th>Responded</th><th>Response</th><th>Date and time</th><th><span className="sr-only">Edit</span></th></tr></thead><tbody>
-          {visible.map((reminder) => <tr key={reminder.id} className="row-static"><td><strong>{reminder.name}</strong></td><td><span className={`status ${reminder.responded === 'Yes' ? 'status-positive' : 'status-caution'}`}><i />{reminder.responded === 'Yes' ? 'Yes' : 'No'}</span></td><td>{reminder.response || <span className="muted">—</span>}</td><td>{reminder.responded === 'Yes' ? formatResponseTime(reminder.respondedAt) : <span className="muted">—</span>}</td><td><button className="icon-button" onClick={() => startEdit(reminder)} aria-label={`Edit reminder for ${reminder.name}`} title="Edit"><Pencil size={14} /></button></td></tr>)}
-          {!visible.length && <tr><td colSpan="5"><div className="table-empty"><CreditCard size={22} /><strong>{empty[0]}</strong>{empty[1] && <span>{empty[1]}</span>}</div></td></tr>}
+        <div className="table-scroll"><table className="client-table reminder-table"><thead><tr><th>Name</th><th>Email</th><th>Responded</th><th>Response</th><th>Date and time</th><th><span className="sr-only">Edit</span></th></tr></thead><tbody>
+          {visible.map((reminder) => <tr key={reminder.id} className="row-static"><td><strong>{reminder.name}</strong></td><td>{emailFor(reminder) || <span className="muted">—</span>}{!reminder.email && emailFor(reminder) && <small className="email-source">From client tracker</small>}</td><td><span className={`status ${reminder.responded === 'Yes' ? 'status-positive' : 'status-caution'}`}><i />{reminder.responded === 'Yes' ? 'Yes' : 'No'}</span></td><td>{reminder.response || <span className="muted">—</span>}</td><td>{reminder.responded === 'Yes' ? formatResponseTime(reminder.respondedAt) : <span className="muted">—</span>}</td><td><button className="icon-button" onClick={() => startEdit(reminder)} aria-label={`Edit reminder for ${reminder.name}`} title="Edit"><Pencil size={14} /></button></td></tr>)}
+          {!visible.length && <tr><td colSpan="6"><div className="table-empty"><CreditCard size={22} /><strong>{empty[0]}</strong>{empty[1] && <span>{empty[1]}</span>}</div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visible.length} of {reminders.length} reminders</span><span><i className="sync-dot" /> Saved to PaymentReminders</span></div>
       </section>

@@ -2,12 +2,14 @@ import ExcelJS from 'exceljs';
 import { stat } from 'node:fs/promises';
 
 export const REMINDER_SHEET = 'PaymentReminders';
-export const REMINDER_HEADERS = ['ReminderID', 'Name', 'Responded', 'Response', 'ResponseDateTime'];
+// Email is last so sheets created before it existed keep their column positions.
+export const REMINDER_HEADERS = ['ReminderID', 'Name', 'Responded', 'Response', 'ResponseDateTime', 'Email'];
 
 export function mapReminder(row) {
   return {
     id: String(row.ReminderID ?? '').trim(),
     name: String(row.Name ?? '').trim(),
+    email: String(row.Email ?? '').trim(),
     responded: String(row.Responded ?? '').trim().toLowerCase() === 'yes' ? 'Yes' : 'No',
     response: String(row.Response ?? '').trim(),
     respondedAt: String(row.ResponseDateTime ?? '').trim(),
@@ -15,7 +17,7 @@ export function mapReminder(row) {
 }
 
 export function reminderRow(reminder) {
-  return [reminder.id, reminder.name, reminder.responded, reminder.response, reminder.respondedAt];
+  return [reminder.id, reminder.name, reminder.responded, reminder.response, reminder.respondedAt, reminder.email || ''];
 }
 
 export function nextReminderId(reminders) {
@@ -65,7 +67,7 @@ export function createReminderWorkbookStore(filePath) {
     sheet.addRow(REMINDER_HEADERS);
     reminders.forEach((reminder) => sheet.addRow(reminderRow(reminder)));
     sheet.getRow(1).font = { bold: true };
-    sheet.columns = [{ width: 12 }, { width: 28 }, { width: 11 }, { width: 60 }, { width: 20 }];
+    sheet.columns = [{ width: 12 }, { width: 28 }, { width: 11 }, { width: 60 }, { width: 20 }, { width: 32 }];
     sheet.views = [{ state: 'frozen', ySplit: 1 }];
     try {
       await workbook.xlsx.writeFile(filePath);

@@ -171,7 +171,14 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .reminder-form { margin-bottom: 14px; padding: 18px; animation: appear .25s ease both; }
 .reminder-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 14px; }
-.reminder-table td:nth-child(3) { min-width: 240px; white-space: normal; line-height: 1.45; }
+.reminder-table td:nth-child(4) { min-width: 240px; white-space: normal; line-height: 1.45; }
+.reminder-table .email-source { display: block; margin-top: 2px; color: #a0aaa2; font-size: 9px; }
+.name-suggest { position: relative; display: block; }
+.suggest-list { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30; max-height: 260px; margin: 0; padding: 4px; overflow-y: auto; list-style: none; border: 1px solid #dfe6df; border-radius: 5px; background: #fff; box-shadow: 0 10px 26px rgb(37 55 46 / 12%); }
+.suggest-list li { display: grid; gap: 2px; padding: 7px 9px; border-radius: 4px; cursor: pointer; }
+.suggest-list li.is-active { background: #eef4ee; }
+.suggest-list strong { color: #35483c; font-size: 11px; font-weight: 600; }
+.suggest-list small { color: #849088; font-size: 9px; font-weight: 400; }
 .reminder-table td:last-child { text-align: right; }
 .court-results-table td strong, .court-results-table td small { display: block; }
 .court-results-table td small { margin-top: 2px; color: #a0aaa2; font-size: 9px; }
