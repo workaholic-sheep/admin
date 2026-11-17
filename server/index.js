@@ -8,7 +8,7 @@ import { createSessionAuth } from './session-auth.js';
 import { createReminderWorkbookStore } from './payment-reminders.js';
 import { createWorkbookStore } from './workbook.js';
 import {
-  WorkPermitError, clockProgress, createWorkPermitWorkbookStore, isTrackingToken, newTrackingToken, pauseClock, resumeClock,
+  DECISIONS, WorkPermitError, createWorkPermitWorkbookStore, workPermitStatus, isTrackingToken, newTrackingToken, pauseClock, resumeClock,
 } from './work-permits.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -103,7 +103,7 @@ app.get('/api/track/:token', trackLimiter, async (request, response, next) => {
     if (!(await workPermitStore.configured())) return notFound();
     const record = (await workPermitStore.list()).find((item) => item.trackingToken === token);
     if (!record) return notFound();
-    response.json({ name: record.name, progress: clockProgress(record) });
+    response.json({ name: record.name, status: workPermitStatus(record) });
   } catch (error) {
     console.error(error);
     response.status(503).json({ error: 'Your tracker is temporarily unavailable. Please try again later.' });
@@ -152,7 +152,7 @@ app.get('/api/court-dates', async (_request, response, next) => {
 // Staff view: everything except the private tracking token, plus the computed 150-day progress.
 function staffWorkPermit(record) {
   const { trackingToken, ...rest } = record;
-  return { ...rest, hasLink: Boolean(trackingToken), progress: clockProgress(record) };
+  return { ...rest, hasLink: Boolean(trackingToken), status: workPermitStatus(record) };
 }
 
 async function requireWorkPermits(response) {
@@ -176,16 +176,27 @@ app.put('/api/work-permits/:id', async (request, response, next) => {
   const name = String(body.name || '').trim();
   const note = String(body.note || '').trim();
   const section = String(body.section || '').trim();
-  const filingDate = String(body.filingDate || '').trim();
   const pausedDays = Number(body.pausedDays || 0);
+  const receiptNumber = String(body.receiptNumber || '').trim().toUpperCase();
+  const decision = DECISIONS.includes(body.decision) ? body.decision : 'Pending';
+  const dates = {};
+  for (const [field, label] of [['filingDate', 'asylum (I-589) filing date'], ['i765FiledDate', 'I-765 filing date'], ['approvedDate', 'approval date'], ['expiryDate', 'expiry date']]) {
+    const value = String(body[field] || '').trim();
+    if (value && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`)))) {
+      return response.status(400).json({ error: `Enter a valid ${label}.` });
+    }
+    dates[field] = value;
+  }
   if (!name) return response.status(400).json({ error: 'Client name is required.' });
   if (name.length > 200) return response.status(400).json({ error: 'Client name must be 200 characters or fewer.' });
   if (note.length > 2000) return response.status(400).json({ error: 'Note must be 2,000 characters or fewer.' });
   if (!['Regular', 'Pending'].includes(section)) return response.status(400).json({ error: 'Section must be Regular or Pending.' });
-  if (filingDate && (!/^\d{4}-\d{2}-\d{2}$/.test(filingDate) || Number.isNaN(Date.parse(`${filingDate}T00:00:00Z`)))) {
-    return response.status(400).json({ error: 'Enter a valid filing date.' });
-  }
   if (!Number.isInteger(pausedDays) || pausedDays < 0 || pausedDays > 3650) return response.status(400).json({ error: 'Days paused must be a whole number of 0 or more.' });
+  if (receiptNumber && !/^[A-Z0-9]{5,20}$/.test(receiptNumber)) return response.status(400).json({ error: 'Receipt number should be letters and numbers only, like IOE0123456789.' });
+  if (dates.i765FiledDate && dates.filingDate && dates.i765FiledDate < dates.filingDate) return response.status(400).json({ error: 'The I-765 cannot be filed before the asylum application.' });
+  if (decision !== 'Pending' && !dates.i765FiledDate) return response.status(400).json({ error: 'Add the I-765 filing date before recording a decision.' });
+  if (decision === 'Approved' && !dates.expiryDate) return response.status(400).json({ error: 'Add the card expiry date for an approved work permit.' });
+  if (dates.approvedDate && dates.expiryDate && dates.expiryDate <= dates.approvedDate) return response.status(400).json({ error: 'The expiry date must be after the approval date.' });
   try {
     if (!(await requireWorkPermits(response))) return;
     const record = await workPermitStore.update(request.params.id, (current) => ({
@@ -193,10 +204,12 @@ app.put('/api/work-permits/:id', async (request, response, next) => {
       name,
       note,
       section,
-      filingDate,
+      ...dates,
       pausedDays,
-      // Without a filing date there is no clock to pause.
-      ...(filingDate ? {} : { clockStatus: 'Running', pausedSince: '' }),
+      receiptNumber,
+      decision,
+      // The clock can't stay paused without a start date or once a decision is made.
+      ...(dates.filingDate && decision === 'Pending' ? {} : { clockStatus: 'Running', pausedSince: '' }),
     }));
     response.json({ workPermit: staffWorkPermit(record) });
   } catch (error) {
@@ -259,7 +272,8 @@ function reminderError(error, response, next) {
 
 app.get('/api/payment-reminders', async (_request, response, next) => {
   try {
-    response.json({ reminders: await reminderStore.list(), source: sourceName });
+    const { reminders, notice } = await reminderStore.load();
+    response.json({ reminders, notice, source: sourceName });
   } catch (error) {
     next(error);
   }

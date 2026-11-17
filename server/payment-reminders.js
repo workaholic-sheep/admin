@@ -5,6 +5,21 @@ export const REMINDER_SHEET = 'PaymentReminders';
 // Email is last so sheets created before it existed keep their column positions.
 export const REMINDER_HEADERS = ['ReminderID', 'Name', 'Responded', 'Response', 'ResponseDateTime', 'Email'];
 
+// Accepts headings typed by hand ("name", "Client Name", "Email Address", ...).
+const HEADER_ALIASES = {
+  reminderid: 'ReminderID', id: 'ReminderID',
+  name: 'Name', clientname: 'Name', client: 'Name', fullname: 'Name',
+  email: 'Email', emailaddress: 'Email', clientemail: 'Email',
+  responded: 'Responded', didtheyrespond: 'Responded',
+  response: 'Response', whattheyresponded: 'Response', reply: 'Response',
+  responsedatetime: 'ResponseDateTime', respondedat: 'ResponseDateTime', dateandtime: 'ResponseDateTime', datetime: 'ResponseDateTime', responsedate: 'ResponseDateTime',
+};
+
+export function canonicalReminderHeader(header) {
+  const key = String(header ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return HEADER_ALIASES[key] || String(header ?? '').trim();
+}
+
 export function mapReminder(row) {
   return {
     id: String(row.ReminderID ?? '').trim(),
@@ -13,6 +28,17 @@ export function mapReminder(row) {
     responded: String(row.Responded ?? '').trim().toLowerCase() === 'yes' ? 'Yes' : 'No',
     response: String(row.Response ?? '').trim(),
     respondedAt: String(row.ResponseDateTime ?? '').trim(),
+  };
+}
+
+export function reminderCells(reminder) {
+  return {
+    ReminderID: reminder.id,
+    Name: reminder.name,
+    Responded: reminder.responded,
+    Response: reminder.response,
+    ResponseDateTime: reminder.respondedAt,
+    Email: reminder.email || '',
   };
 }
 
@@ -38,14 +64,15 @@ function cellValue(cell) {
 function readSheet(sheet) {
   if (!sheet) return [];
   const headers = [];
-  sheet.getRow(1).eachCell({ includeEmpty: false }, (cell, column) => { headers[column] = cellValue(cell).trim(); });
+  sheet.getRow(1).eachCell({ includeEmpty: false }, (cell, column) => { headers[column] = canonicalReminderHeader(cellValue(cell)); });
   const reminders = [];
   for (let rowNumber = 2; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber);
     const record = {};
     headers.forEach((header, column) => { if (header) record[header] = cellValue(row.getCell(column)); });
     const reminder = mapReminder(record);
-    if (reminder.id && reminder.name) reminders.push(reminder);
+    // Rows added by hand may have no ID; give them a stable one based on the row.
+    if (reminder.name) reminders.push({ ...reminder, id: reminder.id || `R${rowNumber}` });
   }
   return reminders;
 }
@@ -85,6 +112,7 @@ export function createReminderWorkbookStore(filePath) {
 
   return {
     list,
+    load: async () => ({ reminders: await list(), notice: '' }),
     add: (input) => queued(async () => {
       const reminders = await list();
       const reminder = { ...input, id: nextReminderId(reminders) };

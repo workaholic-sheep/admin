@@ -1,6 +1,6 @@
 import { google } from 'googleapis';
 import { mapMasterData } from './workbook.js';
-import { REMINDER_HEADERS, REMINDER_SHEET, mapReminder, nextReminderId, reminderRow } from './payment-reminders.js';
+import { REMINDER_HEADERS, REMINDER_SHEET, canonicalReminderHeader, mapReminder, nextReminderId, reminderCells } from './payment-reminders.js';
 import { WORK_PERMIT_HEADERS, WorkPermitError, mapWorkPermit, workPermitCells } from './work-permits.js';
 
 const SHEET_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
@@ -404,55 +404,114 @@ export function createGoogleSheetStore({
     };
   }
 
-  const quotedReminderSheet = quoteSheetName(reminderSheetName);
-  const isMissingTab = (error) => /Unable to parse range/i.test(String(error?.message || ''));
+  const reminderContext = (write = false) => ({ label: 'client', envName: 'GOOGLE_SHEET_ID', serviceAccountEmail, write });
+  // "PaymentReminders", "Payment Reminders " and "payment_reminders" all count as the same tab.
+  const sameTitle = (left, right) => normalize(left).replace(/[^a-z0-9]/g, '') === normalize(right).replace(/[^a-z0-9]/g, '');
 
-  async function listReminders() {
-    const sheets = getSheetsClient();
-    let response;
-    try {
-      response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quotedReminderSheet}!A:F`, valueRenderOption: 'FORMATTED_VALUE' });
-    } catch (error) {
-      if (isMissingTab(error)) return [];
-      throw error;
-    }
-    const [headerRow = [], ...rows] = response.data.values || [];
-    const headers = headerRow.map((header) => String(header ?? '').trim());
-    return rows
-      .map((row, index) => ({ ...mapReminder(Object.fromEntries(headers.map((header, column) => [header, row[column] ?? '']))), rowNumber: index + 2 }))
-      .filter((reminder) => reminder.id && reminder.name);
+  async function findReminderTab(sheets) {
+    const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties.title' });
+    const titles = (data.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
+    return { title: titles.find((title) => title === reminderSheetName) || titles.find((title) => sameTitle(title, reminderSheetName)) || '', titles };
   }
 
-  async function ensureReminderSheet(sheets) {
-    const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties.title' });
-    if (!data.sheets?.some((sheet) => sheet.properties?.title === reminderSheetName)) {
+  // Reads the tab by heading name, so column order and heading spelling don't matter.
+  async function readReminderTab(sheets, title) {
+    const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quoteSheetName(title)}!A:Z`, valueRenderOption: 'FORMATTED_VALUE' });
+    const [headerRow = [], ...rows] = response.data.values || [];
+    const headers = headerRow.map((header) => canonicalReminderHeader(header));
+    const reminders = rows
+      .map((row, index) => {
+        const rowNumber = index + 2;
+        const reminder = mapReminder(Object.fromEntries(headers.map((header, column) => [header, row[column] ?? ''])));
+        return { ...reminder, id: reminder.id || `R${rowNumber}`, rowNumber };
+      })
+      .filter((reminder) => reminder.name);
+    return { headers, rows, reminders };
+  }
+
+  async function loadReminders() {
+    const sheets = getSheetsClient();
+    try {
+      const { title, titles } = await findReminderTab(sheets);
+      if (!title) {
+        return {
+          reminders: [],
+          notice: `No "${reminderSheetName}" tab was found in the client spreadsheet, so there are no reminders to show. Tabs found: ${titles.map((name) => `"${name}"`).join(', ') || 'none'}. The tab is created automatically when you add the first name, or you can import it there.`,
+        };
+      }
+      const { headers, rows, reminders } = await readReminderTab(sheets, title);
+      if (rows.length && !headers.includes('Name')) {
+        return { reminders: [], notice: `The "${title}" tab has no Name column, so its rows can't be shown. Headings found: ${headers.filter(Boolean).map((name) => `"${name}"`).join(', ') || 'none'}.` };
+      }
+      return { reminders, notice: '' };
+    } catch (error) {
+      throw explainGoogleError(error, reminderContext());
+    }
+  }
+
+  // Creates the tab if needed and appends any missing headings after the existing ones.
+  async function prepareReminderTab(sheets) {
+    let { title } = await findReminderTab(sheets);
+    if (!title) {
       await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: reminderSheetName } } }] } });
+      title = reminderSheetName;
     }
-    const { data: header } = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quotedReminderSheet}!A1:F1` });
-    const current = (header.values?.[0] || []).map((value) => String(value ?? '').trim());
-    if (REMINDER_HEADERS.some((name, index) => current[index] !== name)) {
-      await sheets.spreadsheets.values.update({ spreadsheetId, range: `${quotedReminderSheet}!A1:F1`, valueInputOption: 'RAW', requestBody: { values: [REMINDER_HEADERS] } });
+    const tab = await readReminderTab(sheets, title);
+    const headers = tab.headers.length && tab.headers.some(Boolean) ? [...tab.headers] : [];
+    const missing = REMINDER_HEADERS.filter((header) => !headers.includes(header));
+    if (missing.length) {
+      const start = headers.length + 1;
+      headers.push(...missing);
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${quoteSheetName(title)}!${columnLetters(start)}1:${columnLetters(headers.length)}1`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [missing] },
+      });
     }
+    return { title, headers, reminders: tab.reminders };
   }
 
   const strip = ({ rowNumber, ...reminder }) => reminder;
 
   async function addReminder(input) {
     const sheets = getSheetsClient();
-    await ensureReminderSheet(sheets);
-    const reminder = { ...input, id: nextReminderId(await listReminders()) };
-    await sheets.spreadsheets.values.append({ spreadsheetId, range: `${quotedReminderSheet}!A:F`, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [reminderRow(reminder)] } });
-    return reminder;
+    try {
+      const { title, headers, reminders } = await prepareReminderTab(sheets);
+      const reminder = { ...input, id: nextReminderId(reminders) };
+      const cells = reminderCells(reminder);
+      const row = headers.map((header) => cells[header] ?? '');
+      await sheets.spreadsheets.values.append({ spreadsheetId, range: `${quoteSheetName(title)}!A:${columnLetters(headers.length)}`, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [row] } });
+      return reminder;
+    } catch (error) {
+      throw explainGoogleError(error, reminderContext(true));
+    }
   }
 
   async function updateReminder(id, input) {
     const sheets = getSheetsClient();
-    const existing = (await listReminders()).find((reminder) => reminder.id === id);
-    if (!existing) throw new Error('Reminder not found.');
-    await ensureReminderSheet(sheets);
-    const reminder = { ...input, id };
-    await sheets.spreadsheets.values.update({ spreadsheetId, range: `${quotedReminderSheet}!A${existing.rowNumber}:F${existing.rowNumber}`, valueInputOption: 'RAW', requestBody: { values: [reminderRow(reminder)] } });
-    return reminder;
+    try {
+      const { title, headers, reminders } = await prepareReminderTab(sheets);
+      const existing = reminders.find((reminder) => reminder.id === id);
+      if (!existing) throw new Error('Reminder not found.');
+      // A row that had no ID keeps the one it was shown with.
+      const reminder = { ...input, id };
+      const cells = reminderCells(reminder);
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: REMINDER_HEADERS.map((header) => ({
+            range: `${quoteSheetName(title)}!${columnLetters(headers.indexOf(header) + 1)}${existing.rowNumber}`,
+            values: [[cells[header]]],
+          })),
+        },
+      });
+      return reminder;
+    } catch (error) {
+      if (error.message === 'Reminder not found.') throw error;
+      throw explainGoogleError(error, reminderContext(true));
+    }
   }
 
   async function listWorkPermits() {
@@ -529,7 +588,10 @@ export function createGoogleSheetStore({
       },
     },
     reminders: {
-      list: async () => (await listReminders()).map(strip),
+      load: async () => {
+        const { reminders, notice } = await loadReminders();
+        return { reminders: reminders.map(strip), notice };
+      },
       add: (input) => {
         const operation = queuedWrite.then(() => addReminder(input));
         queuedWrite = operation.catch(() => {});

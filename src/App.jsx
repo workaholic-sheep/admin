@@ -590,6 +590,7 @@ function PaymentReminders({ clients }) {
   const [reminders, setReminders] = useState([]);
   const [loadState, setLoadState] = useState('loading');
   const [loadError, setLoadError] = useState('');
+  const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [editing, setEditing] = useState(null);
@@ -605,7 +606,7 @@ function PaymentReminders({ clients }) {
       .then(async (response) => {
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Could not load payment reminders.');
-        if (active) { setReminders(result.reminders || []); setLoadState('ready'); }
+        if (active) { setReminders(result.reminders || []); setNotice(result.notice || ''); setLoadState('ready'); }
       })
       .catch((error) => { if (active) { setLoadError(error.message); setLoadState('error'); } });
     return () => { active = false; };
@@ -655,7 +656,7 @@ function PaymentReminders({ clients }) {
     .filter((reminder) => !query || [reminder.name, emailFor(reminder), reminder.response].some((value) => value.toLowerCase().includes(query)));
   const empty = loadState === 'loading' ? ['Loading reminders…', '']
     : loadState === 'error' ? ['Could not load reminders', loadError]
-      : !reminders.length ? ['No reminders yet', 'Use “Add name” to log each client you reminded.']
+      : !reminders.length ? [notice ? 'No reminders found' : 'No reminders yet', notice || 'Use “Add name” to log each client you reminded.']
         : ['No matching reminders', 'Try a different search or filter.'];
 
   return (
@@ -689,24 +690,47 @@ function PaymentReminders({ clients }) {
   );
 }
 
-function ClockProgress({ progress, compact = false }) {
-  if (!progress?.started) return <span className="muted">No filing date</span>;
-  const percent = Math.round((progress.daysCounted / progress.totalDays) * 100);
-  const detail = progress.complete
-    ? '150-day clock complete'
-    : progress.paused
-      ? `Paused since ${formatDate(progress.pausedSince, { month: 'short', day: 'numeric' })}`
-      : `Est. ${formatDate(progress.estimatedDate)}`;
+const STAGE_TONES = {
+  'not-started': 'neutral', waiting: 'info', 'ready-to-file': 'caution', filed: 'info',
+  active: 'positive', 'renewal-due': 'caution', expired: 'danger', denied: 'danger',
+};
+const ACTION_STAGES = ['not-started', 'ready-to-file', 'renewal-due', 'expired', 'denied'];
+const shortDate = (value) => formatDate(value, { month: 'short', day: 'numeric', year: 'numeric' });
+
+function permitDetail(status) {
+  const { stage, countdown, clock } = status;
+  if (stage === 'not-started') return 'Add the asylum (I-589) filing date';
+  if (stage === 'waiting') return clock?.paused
+    ? `${countdown.days} days to file · paused since ${shortDate(clock.pausedSince)}`
+    : `${countdown.days} days to file · ${shortDate(countdown.date)}`;
+  if (stage === 'ready-to-file') return `Day ${clock?.counted ?? '—'} of the asylum clock · file the I-765 now`;
+  if (stage === 'filed') return countdown
+    ? `${countdown.days} days until USCIS can approve${countdown.date ? ` · ${shortDate(countdown.date)}` : ' · clock paused'}`
+    : `Pending ${status.daysPending} days${status.receiptNumber ? ` · ${status.receiptNumber}` : ''}`;
+  if (stage === 'active') return countdown ? `${countdown.days} days left · expires ${shortDate(countdown.date)}` : 'Add the card expiry date';
+  if (stage === 'renewal-due') return `${countdown.days} days left · file the renewal now`;
+  if (stage === 'expired') return `Expired ${shortDate(status.expiryDate)} · not authorized to work`;
+  return 'Work permit denied · contact the client';
+}
+
+function PermitStatus({ status }) {
+  if (!status) return <span className="muted">—</span>;
+  const { countdown } = status;
+  const tone = status.clock?.paused && status.stage === 'waiting' ? 'caution' : STAGE_TONES[status.stage];
+  // Clock stages fill as days are counted; validity stages show the time remaining.
+  const percent = !countdown ? null
+    : countdown.counted !== undefined ? Math.round((countdown.counted / countdown.of) * 100)
+      : Math.round((countdown.days / countdown.of) * 100);
   return (
-    <span className={`clock-progress ${progress.paused ? 'is-paused' : ''} ${progress.complete ? 'is-complete' : ''} ${compact ? 'is-compact' : ''}`}>
-      <span className="clock-figures"><b>{progress.daysCounted}</b> / {progress.totalDays} days</span>
-      <span className="clock-bar" role="progressbar" aria-valuemin={0} aria-valuemax={progress.totalDays} aria-valuenow={progress.daysCounted} aria-label="Days counted toward 150"><i style={{ width: `${percent}%` }} /></span>
-      <small>{detail}</small>
+    <span className={`permit-status tone-${tone}`}>
+      <span className={`status status-${tone}`}><i />{status.label}</span>
+      {percent !== null && <span className="clock-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-label={status.label}><i style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} /></span>}
+      <small>{permitDetail(status)}</small>
     </span>
   );
 }
 
-const emptyPermitForm = { name: '', note: '', section: 'Regular', filingDate: '', pausedDays: 0 };
+const emptyPermitForm = { name: '', note: '', section: 'Regular', filingDate: '', pausedDays: 0, i765FiledDate: '', receiptNumber: '', decision: 'Pending', approvedDate: '', expiryDate: '' };
 
 function WorkPermitList({ onToast }) {
   const [records, setRecords] = useState([]);
@@ -714,6 +738,7 @@ function WorkPermitList({ onToast }) {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [section, setSection] = useState('All');
+  const [stageFilter, setStageFilter] = useState('all');
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyPermitForm);
   const [formError, setFormError] = useState('');
@@ -732,7 +757,11 @@ function WorkPermitList({ onToast }) {
 
   function startEdit(record) {
     setEditing(record.id);
-    setForm({ name: record.name, note: record.note, section: record.section || 'Regular', filingDate: record.filingDate, pausedDays: record.pausedDays || 0 });
+    setForm({
+      ...emptyPermitForm,
+      ...Object.fromEntries(Object.keys(emptyPermitForm).map((key) => [key, record[key] ?? emptyPermitForm[key]])),
+      section: record.section || 'Regular',
+    });
     setFormError('');
   }
 
@@ -813,10 +842,14 @@ function WorkPermitList({ onToast }) {
   }, []);
 
   const query = search.trim().toLowerCase();
-  const visible = records.filter((record) => (section === 'All' || record.section === section)
-    && (!query || [record.id, record.name, record.note].some((value) => value.toLowerCase().includes(query))));
+  const stageOf = (record) => record.status?.stage || 'not-started';
+  const matchesStage = (record) => stageFilter === 'all'
+    || (stageFilter === 'action' ? ACTION_STAGES.includes(stageOf(record)) : stageOf(record) === stageFilter);
+  const visible = records.filter((record) => (section === 'All' || record.section === section) && matchesStage(record)
+    && (!query || [record.id, record.name, record.note, record.receiptNumber || ''].some((value) => value.toLowerCase().includes(query))));
   const pendingCount = records.filter((record) => record.section === 'Pending').length;
-  const pausedCount = records.filter((record) => record.clockStatus === 'Paused' && record.filingDate).length;
+  const actionCount = records.filter((record) => ACTION_STAGES.includes(stageOf(record))).length;
+  const activeCount = records.filter((record) => ['active', 'renewal-due'].includes(stageOf(record))).length;
   const emptyMessage = status === 'loading'
     ? ['Loading work permits…', '']
     : status === 'not-configured'
@@ -827,7 +860,7 @@ function WorkPermitList({ onToast }) {
 
   return (
     <>
-      <div className="welcome-row roster-heading"><div><span className="eyebrow">WORK PERMITS · {records.length} RECORDS · {pendingCount} PENDING · {pausedCount} PAUSED</span><h1>Work permit tracker</h1><p className="page-subtitle">{visible.length} records shown</p></div></div>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">WORK PERMITS · {records.length} RECORDS · {actionCount} NEED ACTION · {activeCount} WITH WORK PERMIT · {pendingCount} PENDING</span><h1>Work permit tracker</h1><p className="page-subtitle">{visible.length} records shown</p></div></div>
       {shared && <div className="surface share-panel" role="status">
         <div><strong>{shared.copied ? 'Link copied' : 'Copy this link'} for {shared.name}</strong><span>Anyone with this link can see this client's 150-day progress. Internal notes stay hidden.</span></div>
         <input readOnly value={shared.url} onFocus={(event) => event.target.select()} aria-label={`Tracking link for ${shared.name}`} />
@@ -837,8 +870,17 @@ function WorkPermitList({ onToast }) {
         <div className="form-grid">
           <label className="field">Client name<input name="name" value={form.name} onChange={update} maxLength={200} required autoFocus /></label>
           <label className="field">Section<select name="section" value={form.section} onChange={update}><option>Regular</option><option>Pending</option></select><ChevronDown size={15} /></label>
-          <label className="field">Filing date (starts the 150-day clock)<input type="date" name="filingDate" value={form.filingDate} onChange={update} /></label>
-          <label className="field">Days paused so far<input type="number" name="pausedDays" min="0" max="3650" step="1" value={form.pausedDays} onChange={update} /></label>
+          <div className="form-section-title field-wide"><span>01</span><h3>Asylum clock</h3></div>
+          <label className="field">Asylum (I-589) filed — starts the clock<input type="date" name="filingDate" value={form.filingDate} onChange={update} /></label>
+          <label className="field">Days paused so far<input type="number" name="pausedDays" min="0" max="3650" step="1" value={form.pausedDays} onChange={update} /><span className="field-hint">Applicant-caused delays don't count toward 150/180 days.</span></label>
+          <div className="form-section-title field-wide"><span>02</span><h3>Work permit (I-765)</h3></div>
+          <label className="field">I-765 filed<input type="date" name="i765FiledDate" value={form.i765FiledDate} onChange={update} /></label>
+          <label className="field">Receipt number<input name="receiptNumber" value={form.receiptNumber} onChange={update} maxLength={20} placeholder="e.g. IOE0123456789" /></label>
+          <label className="field">Decision<select name="decision" value={form.decision} onChange={update}><option>Pending</option><option>Approved</option><option>Denied</option></select><ChevronDown size={15} /></label>
+          {form.decision === 'Approved' && <>
+            <label className="field">Approved on<input type="date" name="approvedDate" value={form.approvedDate} onChange={update} /></label>
+            <label className="field">Card expires<input type="date" name="expiryDate" value={form.expiryDate} onChange={update} required /><span className="field-hint">From the card. (c)(8) cards are valid up to 18 months.</span></label>
+          </>}
           <label className="field field-wide">Internal note (never shown to the client)<textarea name="note" value={form.note} onChange={update} rows={3} maxLength={2000} /></label>
         </div>
         {formError && <div className="form-error" role="alert">{formError}</div>}
@@ -847,16 +889,28 @@ function WorkPermitList({ onToast }) {
       <section className="surface roster-surface">
         <div className="roster-toolbar">
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, note or ID" aria-label="Search work permits" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+          <FilterMenu label="Status" value={stageFilter} onChange={setStageFilter} icon={CalendarClock} options={[
+            { value: 'all', label: 'All statuses' },
+            { value: 'action', label: 'Needs action' },
+            { value: 'not-started', label: 'Needs I-589 date' },
+            { value: 'waiting', label: 'Waiting – asylum clock' },
+            { value: 'ready-to-file', label: 'Ready to file I-765' },
+            { value: 'filed', label: 'I-765 pending' },
+            { value: 'active', label: 'Work permit active' },
+            { value: 'renewal-due', label: 'Renewal due' },
+            { value: 'expired', label: 'Expired' },
+            { value: 'denied', label: 'Denied' },
+          ]} />
           <FilterMenu label="Section" value={section} onChange={setSection} icon={SlidersHorizontal} options={[{ value: 'All', label: 'All sections' }, { value: 'Regular', label: 'Regular' }, { value: 'Pending', label: 'Pending' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table work-permit-table"><thead><tr><th>ID</th><th>Client</th><th>Note</th><th>Section</th><th>150-day clock</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>
+        <div className="table-scroll"><table className="client-table work-permit-table"><thead><tr><th>ID</th><th>Client</th><th>Note</th><th>Section</th><th>Status &amp; countdown</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>
           {visible.map((record) => {
             const paused = record.clockStatus === 'Paused';
             const busy = busyId === record.id;
-            return <tr key={record.id}><td>{record.id}</td><td><strong>{record.name}</strong></td><td>{record.note || <span className="muted">No note</span>}</td><td><span className={`status ${record.section === 'Pending' ? 'status-caution' : 'status-neutral'}`}><i />{record.section || 'Not set'}</span></td><td><ClockProgress progress={record.progress} /></td>
+            return <tr key={record.id}><td>{record.id}</td><td><strong>{record.name}</strong></td><td>{record.note || <span className="muted">No note</span>}</td><td><span className={`status ${record.section === 'Pending' ? 'status-caution' : 'status-neutral'}`}><i />{record.section || 'Not set'}</span></td><td><PermitStatus status={record.status} /></td>
               <td><span className="row-actions">
                 <button className="icon-button" onClick={() => startEdit(record)} aria-label={`Edit ${record.name}`} title="Edit"><Pencil size={14} /></button>
-                <button className={`button button-secondary clock-button ${paused ? 'is-paused' : ''}`} onClick={() => toggleClock(record)} disabled={busy || !record.filingDate || (!paused && record.progress?.complete)} title={record.filingDate ? '' : 'Add a filing date first'}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? 'Resume' : 'Pause'}</button>
+                <button className={`button button-secondary clock-button ${paused ? 'is-paused' : ''}`} onClick={() => toggleClock(record)} disabled={busy || !record.filingDate || record.decision !== 'Pending'} title={!record.filingDate ? 'Add the I-589 filing date first' : record.decision !== 'Pending' ? 'The clock no longer applies after a decision' : ''}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? 'Resume' : 'Pause'}</button>
                 <button className="button button-secondary" onClick={() => copyLink(record)} disabled={busy}><Link2 size={14} />Copy link</button>
               </span></td></tr>;
           })}
