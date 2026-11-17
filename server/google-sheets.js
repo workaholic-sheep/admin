@@ -1,6 +1,7 @@
 import { google } from 'googleapis';
-import { mapMasterData, mapWorkPermit } from './workbook.js';
+import { mapMasterData } from './workbook.js';
 import { REMINDER_HEADERS, REMINDER_SHEET, mapReminder, nextReminderId, reminderRow } from './payment-reminders.js';
+import { WORK_PERMIT_HEADERS, WorkPermitError, mapWorkPermit, workPermitCells } from './work-permits.js';
 
 const SHEET_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const normalize = (value) => String(value ?? '').trim().toLowerCase();
@@ -22,15 +23,17 @@ function safeUserText(value) {
 export class SheetSetupError extends Error {}
 
 // Turns Google API failures into messages that say what to fix in the spreadsheet.
-function explainGoogleError(error, { label, envName, serviceAccountEmail }) {
-  if (error instanceof SheetSetupError) return error;
+function explainGoogleError(error, { label, envName, serviceAccountEmail, write = false }) {
+  if (error instanceof SheetSetupError || error instanceof WorkPermitError) return error;
   const status = Number(error?.code || error?.response?.status || 0);
   const detail = String(error?.message || '');
   if (/not supported for this document/i.test(detail)) {
     return new SheetSetupError(`The ${label} file is an Excel file stored in Google Drive, which Google's API can't read. Open it in Drive, choose File → Save as Google Sheets, then put the new sheet's ID in ${envName}.`);
   }
   if (status === 403) {
-    return new SheetSetupError(`The ${label} spreadsheet isn't shared with the app. Share it with ${serviceAccountEmail} (Viewer or Editor).`);
+    return new SheetSetupError(write
+      ? `The app can't save to the ${label} spreadsheet. Share it with ${serviceAccountEmail} as Editor.`
+      : `The ${label} spreadsheet isn't shared with the app. Share it with ${serviceAccountEmail} (Viewer or Editor).`);
   }
   if (status === 404) {
     return new SheetSetupError(`The ${label} spreadsheet was not found. Check the ID in ${envName}.`);
@@ -469,11 +472,62 @@ export function createGoogleSheetStore({
       .filter((record) => record.id && record.name);
   }
 
+  async function updateWorkPermit(id, mutate) {
+    const sheets = getSheetsClient();
+    const context = { label: 'work permit', envName: 'GOOGLE_WORK_PERMIT_SHEET_ID', serviceAccountEmail, write: true };
+    try {
+      const title = await resolveTab(sheets, workPermitSpreadsheetId, workPermitSheetName, 'work permit');
+      const quoted = quoteSheetName(title);
+      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: workPermitSpreadsheetId, range: `${quoted}!A:Z`, valueRenderOption: 'FORMATTED_VALUE' });
+      const values = data.values || [];
+      const headers = (values[0] || []).map((header) => String(header ?? '').trim());
+      const missing = WORK_PERMIT_HEADERS.filter((header) => !headers.includes(header));
+      if (missing.length) {
+        const start = headers.length + 1;
+        headers.push(...missing);
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: workPermitSpreadsheetId,
+          range: `${quoted}!${columnLetters(start)}1:${columnLetters(headers.length)}1`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [missing] },
+        });
+      }
+      const idColumn = headers.indexOf('ClientID');
+      const rowIndex = values.findIndex((row, index) => index > 0 && String(row[idColumn] ?? '').trim() === id);
+      if (rowIndex === -1) throw new WorkPermitError('Work permit not found.', 404);
+      const current = mapWorkPermit(Object.fromEntries(headers.map((header, index) => [header, values[rowIndex][index] ?? ''])));
+      const next = mutate(current);
+      const cells = workPermitCells(next);
+      const rowNumber = rowIndex + 1;
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: workPermitSpreadsheetId,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: WORK_PERMIT_HEADERS.map((header) => ({
+            range: `${quoted}!${columnLetters(headers.indexOf(header) + 1)}${rowNumber}`,
+            values: [[cells[header]]],
+          })),
+        },
+      });
+      return next;
+    } catch (error) {
+      resolvedTitles.delete(`${workPermitSpreadsheetId}|${workPermitSheetName}`);
+      throw explainGoogleError(error, context);
+    }
+  }
+
   return {
     list,
     listCourtDates,
-    workPermitsConfigured: Boolean(workPermitSpreadsheetId),
-    listWorkPermits,
+    workPermits: {
+      configured: async () => Boolean(workPermitSpreadsheetId),
+      list: listWorkPermits,
+      update: (id, mutate) => {
+        const operation = queuedWrite.then(() => updateWorkPermit(id, mutate));
+        queuedWrite = operation.catch(() => {});
+        return operation;
+      },
+    },
     reminders: {
       list: async () => (await listReminders()).map(strip),
       add: (input) => {

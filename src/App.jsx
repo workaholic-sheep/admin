@@ -15,9 +15,12 @@ import {
   EyeOff,
   FileSpreadsheet,
   LayoutDashboard,
+  Link2,
   LogOut,
   Menu,
+  Pause,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   Search,
@@ -685,12 +688,107 @@ function PaymentReminders({ clients }) {
   );
 }
 
-function WorkPermitList() {
+function ClockProgress({ progress, compact = false }) {
+  if (!progress?.started) return <span className="muted">No filing date</span>;
+  const percent = Math.round((progress.daysCounted / progress.totalDays) * 100);
+  const detail = progress.complete
+    ? '150-day clock complete'
+    : progress.paused
+      ? `Paused since ${formatDate(progress.pausedSince, { month: 'short', day: 'numeric' })}`
+      : `Est. ${formatDate(progress.estimatedDate)}`;
+  return (
+    <span className={`clock-progress ${progress.paused ? 'is-paused' : ''} ${progress.complete ? 'is-complete' : ''} ${compact ? 'is-compact' : ''}`}>
+      <span className="clock-figures"><b>{progress.daysCounted}</b> / {progress.totalDays} days</span>
+      <span className="clock-bar" role="progressbar" aria-valuemin={0} aria-valuemax={progress.totalDays} aria-valuenow={progress.daysCounted} aria-label="Days counted toward 150"><i style={{ width: `${percent}%` }} /></span>
+      <small>{detail}</small>
+    </span>
+  );
+}
+
+const emptyPermitForm = { name: '', note: '', section: 'Regular', filingDate: '', pausedDays: 0 };
+
+function WorkPermitList({ onToast }) {
   const [records, setRecords] = useState([]);
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [section, setSection] = useState('All');
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState(emptyPermitForm);
+  const [formError, setFormError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [busyId, setBusyId] = useState('');
+  const [shared, setShared] = useState(null);
+
+  const replace = (record) => setRecords((current) => current.map((item) => item.id === record.id ? record : item));
+
+  async function send(url, options = {}) {
+    const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'Something went wrong. Please try again.');
+    return result;
+  }
+
+  function startEdit(record) {
+    setEditing(record.id);
+    setForm({ name: record.name, note: record.note, section: record.section || 'Regular', filingDate: record.filingDate, pausedDays: record.pausedDays || 0 });
+    setFormError('');
+  }
+
+  function update(event) {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setFormError('');
+    try {
+      const result = await send(`/api/work-permits/${encodeURIComponent(editing)}`, { method: 'PUT', body: JSON.stringify({ ...form, pausedDays: Number(form.pausedDays || 0) }) });
+      replace(result.workPermit);
+      setEditing(null);
+      onToast(`${result.workPermit.name} updated`);
+    } catch (saveError) {
+      setFormError(saveError.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleClock(record) {
+    setBusyId(record.id);
+    try {
+      const action = record.clockStatus === 'Paused' ? 'resume' : 'pause';
+      const result = await send(`/api/work-permits/${encodeURIComponent(record.id)}/${action}`, { method: 'POST' });
+      replace(result.workPermit);
+      onToast(`${record.name}: clock ${action === 'pause' ? 'paused' : 'resumed'}`);
+    } catch (actionError) {
+      onToast(actionError.message);
+    } finally {
+      setBusyId('');
+    }
+  }
+
+  async function copyLink(record) {
+    setBusyId(record.id);
+    try {
+      const result = await send(`/api/work-permits/${encodeURIComponent(record.id)}/link`, { method: 'POST' });
+      replace(result.workPermit);
+      const url = `${window.location.origin}/track/${result.token}`;
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      } catch { /* Clipboard can be blocked; the link is shown below for manual copying. */ }
+      setShared({ id: record.id, name: record.name, url, copied });
+      if (copied) onToast(`Tracking link copied for ${record.name}`);
+    } catch (linkError) {
+      onToast(linkError.message);
+    } finally {
+      setBusyId('');
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -717,6 +815,7 @@ function WorkPermitList() {
   const visible = records.filter((record) => (section === 'All' || record.section === section)
     && (!query || [record.id, record.name, record.note].some((value) => value.toLowerCase().includes(query))));
   const pendingCount = records.filter((record) => record.section === 'Pending').length;
+  const pausedCount = records.filter((record) => record.clockStatus === 'Paused' && record.filingDate).length;
   const emptyMessage = status === 'loading'
     ? ['Loading work permits…', '']
     : status === 'not-configured'
@@ -727,17 +826,42 @@ function WorkPermitList() {
 
   return (
     <>
-      <div className="welcome-row roster-heading"><div><span className="eyebrow">WORK PERMITS · {records.length} RECORDS · {pendingCount} PENDING</span><h1>Work permit tracker</h1><p className="page-subtitle">{visible.length} records shown</p></div></div>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">WORK PERMITS · {records.length} RECORDS · {pendingCount} PENDING · {pausedCount} PAUSED</span><h1>Work permit tracker</h1><p className="page-subtitle">{visible.length} records shown</p></div></div>
+      {shared && <div className="surface share-panel" role="status">
+        <div><strong>{shared.copied ? 'Link copied' : 'Copy this link'} for {shared.name}</strong><span>Anyone with this link can see this client's 150-day progress. Internal notes stay hidden.</span></div>
+        <input readOnly value={shared.url} onFocus={(event) => event.target.select()} aria-label={`Tracking link for ${shared.name}`} />
+        <button className="icon-button" onClick={() => setShared(null)} aria-label="Close"><X size={15} /></button>
+      </div>}
+      {editing && <form className="surface reminder-form" onSubmit={save}>
+        <div className="form-grid">
+          <label className="field">Client name<input name="name" value={form.name} onChange={update} maxLength={200} required autoFocus /></label>
+          <label className="field">Section<select name="section" value={form.section} onChange={update}><option>Regular</option><option>Pending</option></select><ChevronDown size={15} /></label>
+          <label className="field">Filing date (starts the 150-day clock)<input type="date" name="filingDate" value={form.filingDate} onChange={update} /></label>
+          <label className="field">Days paused so far<input type="number" name="pausedDays" min="0" max="3650" step="1" value={form.pausedDays} onChange={update} /></label>
+          <label className="field field-wide">Internal note (never shown to the client)<textarea name="note" value={form.note} onChange={update} rows={3} maxLength={2000} /></label>
+        </div>
+        {formError && <div className="form-error" role="alert">{formError}</div>}
+        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setEditing(null)}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : 'Save changes'}</button></div>
+      </form>}
       <section className="surface roster-surface">
         <div className="roster-toolbar">
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, note or ID" aria-label="Search work permits" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
           <FilterMenu label="Section" value={section} onChange={setSection} icon={SlidersHorizontal} options={[{ value: 'All', label: 'All sections' }, { value: 'Regular', label: 'Regular' }, { value: 'Pending', label: 'Pending' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table work-permit-table"><thead><tr><th>ID</th><th>Client</th><th>Note</th><th>Section</th></tr></thead><tbody>
-          {visible.map((record) => <tr key={record.id}><td>{record.id}</td><td><strong>{record.name}</strong></td><td>{record.note || <span className="muted">No note</span>}</td><td><span className={`status ${record.section === 'Pending' ? 'status-caution' : 'status-neutral'}`}><i />{record.section || 'Not set'}</span></td></tr>)}
-          {!visible.length && <tr><td colSpan="4"><div className="table-empty"><Briefcase size={22} /><strong>{emptyMessage[0]}</strong>{emptyMessage[1] && <span>{emptyMessage[1]}</span>}</div></td></tr>}
+        <div className="table-scroll"><table className="client-table work-permit-table"><thead><tr><th>ID</th><th>Client</th><th>Note</th><th>Section</th><th>150-day clock</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>
+          {visible.map((record) => {
+            const paused = record.clockStatus === 'Paused';
+            const busy = busyId === record.id;
+            return <tr key={record.id}><td>{record.id}</td><td><strong>{record.name}</strong></td><td>{record.note || <span className="muted">No note</span>}</td><td><span className={`status ${record.section === 'Pending' ? 'status-caution' : 'status-neutral'}`}><i />{record.section || 'Not set'}</span></td><td><ClockProgress progress={record.progress} /></td>
+              <td><span className="row-actions">
+                <button className="icon-button" onClick={() => startEdit(record)} aria-label={`Edit ${record.name}`} title="Edit"><Pencil size={14} /></button>
+                <button className={`button button-secondary clock-button ${paused ? 'is-paused' : ''}`} onClick={() => toggleClock(record)} disabled={busy || !record.filingDate || (!paused && record.progress?.complete)} title={record.filingDate ? '' : 'Add a filing date first'}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? 'Resume' : 'Pause'}</button>
+                <button className="button button-secondary" onClick={() => copyLink(record)} disabled={busy}><Link2 size={14} />Copy link</button>
+              </span></td></tr>;
+          })}
+          {!visible.length && <tr><td colSpan="6"><div className="table-empty"><Briefcase size={22} /><strong>{emptyMessage[0]}</strong>{emptyMessage[1] && <span>{emptyMessage[1]}</span>}</div></td></tr>}
         </tbody></table></div>
-        <div className="table-foot"><span>Showing {visible.length} of {records.length} records</span><span><i className="sync-dot" /> Read-only view</span></div>
+        <div className="table-foot"><span>Showing {visible.length} of {records.length} records</span><span><i className="sync-dot" /> Saved to WorkPermits</span></div>
       </section>
     </>
   );
@@ -1044,7 +1168,7 @@ export default function App() {
             : page === 'clients'
               ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} />
               : page === 'work-permits'
-                ? <WorkPermitList />
+                ? <WorkPermitList onToast={setToast} />
               : page === 'payments'
                 ? <PaymentReminders clients={clients} />
               : page === 'court-dates' || resultView === 'court-dates'

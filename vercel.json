@@ -1,6 +1,9 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/track/:token", "destination": "/index.html" }
+  ],
   "functions": {
     "api/[...path].js": {
       "includeFiles": "server/**"

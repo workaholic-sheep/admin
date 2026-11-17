@@ -82,22 +82,6 @@ async function loadWorkbook(filePath) {
   return workbook;
 }
 
-export function mapWorkPermit(row) {
-  return {
-    id: String(row.ClientID ?? '').trim(),
-    name: String(row.ClientName ?? '').trim(),
-    note: String(row.OriginalNote ?? '').trim(),
-    section: String(row.Section ?? '').trim(),
-  };
-}
-
-export async function readWorkPermits(filePath, sheetName = 'WorkPermits') {
-  const workbook = await loadWorkbook(filePath);
-  const sheet = workbook.getWorksheet(sheetName);
-  if (!sheet) throw new Error(`The ${sheetName} tab was not found in the work permit workbook.`);
-  return rowsAsObjects(sheet).map(mapWorkPermit).filter((record) => record.id && record.name);
-}
-
 export async function readClients(filePath) {
   const workbook = await loadWorkbook(filePath);
   const clients = rowsAsObjects(workbook.getWorksheet(MASTER_SHEET))
@@ -561,12 +545,10 @@ async function completeFollowUpInWorkbook(filePath, clientId) {
   return (await readClients(filePath)).find((client) => client.id === clientId);
 }
 
-export function createWorkbookStore(filePath, courtWorkbookPath = filePath, workPermitWorkbookPath = '') {
+export function createWorkbookStore(filePath, courtWorkbookPath = filePath) {
   return {
     list: () => readClients(filePath),
     listCourtDates: () => readCourtDates(courtWorkbookPath),
-    workPermitsConfigured: Boolean(workPermitWorkbookPath),
-    listWorkPermits: () => readWorkPermits(workPermitWorkbookPath),
     add: (input) => {
       const operation = writeQueue.then(() => addClientToWorkbook(filePath, input));
       writeQueue = operation.catch(() => {});

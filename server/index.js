@@ -7,6 +7,9 @@ import { SheetSetupError, createGoogleSheetStore } from './google-sheets.js';
 import { createSessionAuth } from './session-auth.js';
 import { createReminderWorkbookStore } from './payment-reminders.js';
 import { createWorkbookStore } from './workbook.js';
+import {
+  WorkPermitError, clockProgress, createWorkPermitWorkbookStore, isTrackingToken, newTrackingToken, pauseClock, resumeClock,
+} from './work-permits.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const workbookPath = resolve(process.env.WORKBOOK_PATH || resolve(root, "Prototype of Client's Tracker .xlsx"));
@@ -38,7 +41,8 @@ const store = useGoogleSheets
     serviceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     privateKey: process.env.GOOGLE_PRIVATE_KEY,
   })
-  : createWorkbookStore(workbookPath, courtWorkbookPath, workPermitWorkbookPath);
+  : createWorkbookStore(workbookPath, courtWorkbookPath);
+const workPermitStore = useGoogleSheets ? store.workPermits : createWorkPermitWorkbookStore(workPermitWorkbookPath);
 const reminderStore = useGoogleSheets ? store.reminders : createReminderWorkbookStore(reminderWorkbookPath);
 const sessionAuth = createSessionAuth({
   enabled: production,
@@ -80,6 +84,32 @@ app.post('/api/logout', (_request, response) => {
   response.json({ authenticated: false });
 });
 
+const trackLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Try again in a minute.' },
+});
+
+// Public client view, reached through the private link. Never returns staff notes or section.
+app.get('/api/track/:token', trackLimiter, async (request, response, next) => {
+  response.setHeader('Cache-Control', 'no-store');
+  response.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  const { token } = request.params;
+  const notFound = () => response.status(404).json({ error: 'This tracking link is not valid. Please contact our office.' });
+  if (!isTrackingToken(token)) return notFound();
+  try {
+    if (!(await workPermitStore.configured())) return notFound();
+    const record = (await workPermitStore.list()).find((item) => item.trackingToken === token);
+    if (!record) return notFound();
+    response.json({ name: record.name, progress: clockProgress(record) });
+  } catch (error) {
+    console.error(error);
+    response.status(503).json({ error: 'Your tracker is temporarily unavailable. Please try again later.' });
+  }
+});
+
 app.use('/api', (request, response, next) => {
   if (sessionAuth.isAuthenticated(request)) return next();
   return response.status(401).json({ error: 'Sign in to access client records.' });
@@ -119,16 +149,90 @@ app.get('/api/court-dates', async (_request, response, next) => {
   }
 });
 
+// Staff view: everything except the private tracking token, plus the computed 150-day progress.
+function staffWorkPermit(record) {
+  const { trackingToken, ...rest } = record;
+  return { ...rest, hasLink: Boolean(trackingToken), progress: clockProgress(record) };
+}
+
+async function requireWorkPermits(response) {
+  if (await workPermitStore.configured()) return true;
+  response.status(409).json({ error: 'Work permit data is not connected.' });
+  return false;
+}
+
 app.get('/api/work-permits', async (_request, response, next) => {
-  const notConfigured = { workPermits: [], configured: false, source: sourceName };
-  if (!store.workPermitsConfigured) return response.json(notConfigured);
-  if (!useGoogleSheets && !(await stat(workPermitWorkbookPath).catch(() => null))) return response.json(notConfigured);
   try {
-    const workPermits = await store.listWorkPermits();
-    const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workPermitWorkbookPath)).mtime.toISOString();
-    response.json({ workPermits, configured: true, modifiedAt, source: sourceName });
+    if (!(await workPermitStore.configured())) return response.json({ workPermits: [], configured: false, source: sourceName });
+    const workPermits = (await workPermitStore.list()).map(staffWorkPermit);
+    response.json({ workPermits, configured: true, source: sourceName });
   } catch (error) {
-    if (error.message.includes('tab was not found')) return response.status(500).json({ error: error.message });
+    next(error);
+  }
+});
+
+app.put('/api/work-permits/:id', async (request, response, next) => {
+  const body = request.body || {};
+  const name = String(body.name || '').trim();
+  const note = String(body.note || '').trim();
+  const section = String(body.section || '').trim();
+  const filingDate = String(body.filingDate || '').trim();
+  const pausedDays = Number(body.pausedDays || 0);
+  if (!name) return response.status(400).json({ error: 'Client name is required.' });
+  if (name.length > 200) return response.status(400).json({ error: 'Client name must be 200 characters or fewer.' });
+  if (note.length > 2000) return response.status(400).json({ error: 'Note must be 2,000 characters or fewer.' });
+  if (!['Regular', 'Pending'].includes(section)) return response.status(400).json({ error: 'Section must be Regular or Pending.' });
+  if (filingDate && (!/^\d{4}-\d{2}-\d{2}$/.test(filingDate) || Number.isNaN(Date.parse(`${filingDate}T00:00:00Z`)))) {
+    return response.status(400).json({ error: 'Enter a valid filing date.' });
+  }
+  if (!Number.isInteger(pausedDays) || pausedDays < 0 || pausedDays > 3650) return response.status(400).json({ error: 'Days paused must be a whole number of 0 or more.' });
+  try {
+    if (!(await requireWorkPermits(response))) return;
+    const record = await workPermitStore.update(request.params.id, (current) => ({
+      ...current,
+      name,
+      note,
+      section,
+      filingDate,
+      pausedDays,
+      // Without a filing date there is no clock to pause.
+      ...(filingDate ? {} : { clockStatus: 'Running', pausedSince: '' }),
+    }));
+    response.json({ workPermit: staffWorkPermit(record) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/work-permits/:id/pause', async (request, response, next) => {
+  try {
+    if (!(await requireWorkPermits(response))) return;
+    const record = await workPermitStore.update(request.params.id, (current) => pauseClock(current));
+    response.json({ workPermit: staffWorkPermit(record) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/work-permits/:id/resume', async (request, response, next) => {
+  try {
+    if (!(await requireWorkPermits(response))) return;
+    const record = await workPermitStore.update(request.params.id, (current) => resumeClock(current));
+    response.json({ workPermit: staffWorkPermit(record) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Returns the client's private tracking token, creating one the first time.
+app.post('/api/work-permits/:id/link', async (request, response, next) => {
+  try {
+    if (!(await requireWorkPermits(response))) return;
+    const record = await workPermitStore.update(request.params.id, (current) => (
+      isTrackingToken(current.trackingToken) ? current : { ...current, trackingToken: newTrackingToken() }
+    ));
+    response.json({ token: record.trackingToken, workPermit: staffWorkPermit(record) });
+  } catch (error) {
     next(error);
   }
 });
@@ -282,6 +386,7 @@ if (process.env.NODE_ENV === 'production') {
 app.use((error, _request, response, _next) => {
   console.error(error);
   if (error instanceof SheetSetupError) return response.status(500).json({ error: error.message });
+  if (error instanceof WorkPermitError) return response.status(error.status).json({ error: error.message });
   const missingFile = String(error?.message || '').match(/^File not found: (.+)$/);
   if (!useGoogleSheets && missingFile) {
     return response.status(500).json({ error: `Workbook not found: ${missingFile[1].split(/[\\/]/).pop()}. Add it to the project folder.` });
