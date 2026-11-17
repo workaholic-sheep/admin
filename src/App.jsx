@@ -903,13 +903,7 @@ function WorkPermitList({ clients = [], onToast }) {
           <div className="form-section-title field-wide"><span>01</span><h3>Asylum clock</h3></div>
           <label className="field">Init Asylum Rec'd Date (I-589) — starts the EAD clock<input type="date" name="filingDate" value={form.filingDate} onChange={update} /></label>
           <label className="field">Days paused so far<input type="number" name="pausedDays" min="0" max="3650" step="1" value={form.pausedDays} onChange={update} /><span className="field-hint">Applicant-caused delays don't count toward 150/180 days.</span></label>
-          <div className="form-section-title field-wide"><span>02</span><h3>Work permit (I-765)</h3></div>
           <label className="field">A-Number<input name="aNumber" value={form.aNumber} onChange={update} maxLength={14} inputMode="numeric" placeholder="e.g. 245-943-700" /><span className="field-hint">Staff only — never shown on the client's link.</span></label>
-          <label className="field">Decision<select name="decision" value={form.decision} onChange={update}><option>Pending</option><option>Approved</option><option>Denied</option></select><ChevronDown size={15} /></label>
-          {form.decision === 'Approved' && <>
-            <label className="field">Approved on<input type="date" name="approvedDate" value={form.approvedDate} onChange={update} /></label>
-            <label className="field">Card expires<input type="date" name="expiryDate" value={form.expiryDate} onChange={update} required /><span className="field-hint">From the card. (c)(8) cards are valid up to 18 months.</span></label>
-          </>}
           <label className="field field-wide">Internal note (never shown to the client)<textarea name="note" value={form.note} onChange={update} rows={3} maxLength={2000} /></label>
         </div>
         {formError && <div className="form-error" role="alert">{formError}</div>}
