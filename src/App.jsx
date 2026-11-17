@@ -30,6 +30,7 @@ import {
   X,
 } from 'lucide-react';
 import { CASE_TYPES, countCaseTypes, isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
+import { pageFromPath, pathForPage } from './routes.js';
 
 const frequencies = [
   'Once a Month',
@@ -979,7 +980,22 @@ function CentralClock() {
 }
 
 export default function App() {
-  const [page, setPage] = useState('dashboard');
+  const [page, setPageState] = useState(() => pageFromPath(window.location.pathname));
+
+  // Each tab has its own address, so refresh, bookmarks and Back/Forward all work.
+  const setPage = (next) => {
+    const path = pathForPage(next);
+    if (window.location.pathname !== path) window.history.pushState(null, '', path);
+    setPageState(pageFromPath(path));
+  };
+
+  useEffect(() => {
+    const canonical = pathForPage(pageFromPath(window.location.pathname));
+    if (window.location.pathname !== canonical) window.history.replaceState(null, '', canonical);
+    const onPopState = () => setPageState(pageFromPath(window.location.pathname));
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
   const [clients, setClients] = useState([]);
   const [courtDates, setCourtDates] = useState([]);
   const [courtDatesError, setCourtDatesError] = useState('');
@@ -1155,7 +1171,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#dashboard" onClick={(event) => { event.preventDefault(); setPage('dashboard'); }}><img className="brand-mark" src="/logo.png" alt="" width="36" height="36" /><span className="brand-name">BBeckford Law<span>ADMIN PORTAL</span></span></a>
+        <a className="brand" href="/" onClick={(event) => { event.preventDefault(); setPage('dashboard'); }}><img className="brand-mark" src="/logo.png" alt="" width="36" height="36" /><span className="brand-name">BBeckford Law<span>ADMIN PORTAL</span></span></a>
         <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><button className={`nav-item ${page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates') ? 'active' : ''}`} onClick={() => setPage('clients')}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button></div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
