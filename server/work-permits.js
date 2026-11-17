@@ -160,6 +160,22 @@ export function resumeClock(record, today = centralToday()) {
   return { ...record, clockStatus: 'Running', pausedSince: '', pausedDays: record.pausedDays + pausedFor };
 }
 
+export function nextWorkPermitId(records) {
+  const highest = records.reduce((max, record) => Math.max(max, Number(record.id.match(/\d+/)?.[0] || 0)), 0);
+  return `WP-${String(highest + 1).padStart(3, '0')}`;
+}
+
+export function newWorkPermit(input, records) {
+  return {
+    ...mapWorkPermit({}),
+    ...input,
+    id: nextWorkPermitId(records),
+    clockStatus: 'Running',
+    pausedSince: '',
+    trackingToken: '',
+  };
+}
+
 export function newTrackingToken() {
   return randomBytes(24).toString('base64url');
 }
@@ -223,6 +239,16 @@ export function createWorkPermitWorkbookStore(filePath) {
   return {
     configured: () => stat(filePath).then(() => true, () => false),
     list,
+    add(input) {
+      const operation = queue.then(async () => {
+        const records = await list();
+        const record = newWorkPermit(input, records);
+        await save([...records, record]);
+        return record;
+      });
+      queue = operation.catch(() => {});
+      return operation;
+    },
     update(id, mutate) {
       const operation = queue.then(async () => {
         const records = await list();

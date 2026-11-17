@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import { mapMasterData } from './workbook.js';
 import { REMINDER_HEADERS, REMINDER_SHEET, canonicalReminderHeader, mapReminder, nextReminderId, reminderCells } from './payment-reminders.js';
-import { WORK_PERMIT_HEADERS, WorkPermitError, mapWorkPermit, workPermitCells } from './work-permits.js';
+import { WORK_PERMIT_HEADERS, WorkPermitError, mapWorkPermit, newWorkPermit, workPermitCells } from './work-permits.js';
 
 const SHEET_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const normalize = (value) => String(value ?? '').trim().toLowerCase();
@@ -21,6 +21,14 @@ function safeUserText(value) {
 }
 
 export class SheetSetupError extends Error {}
+
+// Accepts either a bare spreadsheet ID or the full Google Sheets address.
+export function spreadsheetIdFrom(value) {
+  const text = String(value ?? '').trim();
+  return text.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/)?.[1] || text;
+}
+
+const looksLikeSpreadsheetId = (value) => /^[A-Za-z0-9_-]{25,}$/.test(String(value || ''));
 
 // Turns Google API failures into messages that say what to fix in the spreadsheet.
 function explainGoogleError(error, { label, envName, serviceAccountEmail, write = false }) {
@@ -90,6 +98,7 @@ export function createGoogleSheetStore({
   workPermitSpreadsheetId = '',
   workPermitSheetName = 'WorkPermits',
   reminderSheetName = REMINDER_SHEET,
+  reminderSpreadsheetId: reminderSpreadsheetIdOption = '',
   serviceAccountEmail,
   privateKey,
 }, api = google) {
@@ -99,6 +108,10 @@ export function createGoogleSheetStore({
 
   // Finds the real tab title, ignoring case and stray spaces (e.g. "COURT DATE LIST ").
   async function resolveTab(sheets, targetSpreadsheetId, wanted, label) {
+    if (!looksLikeSpreadsheetId(targetSpreadsheetId)) {
+      const envName = label === 'court date' ? 'GOOGLE_COURT_SHEET_ID' : 'GOOGLE_WORK_PERMIT_SHEET_ID';
+      throw new SheetSetupError(`${envName} is set to "${targetSpreadsheetId}", which looks like a name, not a spreadsheet ID. Use the long ID from the sheet's web address (the part between /d/ and /edit), or paste the whole address. Put the tab name in ${envName.replace('_ID', '_NAME')} instead.`);
+    }
     const cacheKey = `${targetSpreadsheetId}|${wanted}`;
     if (resolvedTitles.has(cacheKey)) return resolvedTitles.get(cacheKey);
     const { data } = await sheets.spreadsheets.get({ spreadsheetId: targetSpreadsheetId, fields: 'sheets.properties.title' });
@@ -404,19 +417,33 @@ export function createGoogleSheetStore({
     };
   }
 
-  const reminderContext = (write = false) => ({ label: 'client', envName: 'GOOGLE_SHEET_ID', serviceAccountEmail, write });
+  // Reminders live in their own spreadsheet when GOOGLE_PAYMENT_REMINDER_SHEET_ID is set, else in the client spreadsheet.
+  const reminderSpreadsheetId = reminderSpreadsheetIdOption || spreadsheetId;
+  const reminderSpreadsheetLabel = reminderSpreadsheetIdOption ? 'payment reminder' : 'client';
+  const reminderContext = (write = false) => ({
+    label: reminderSpreadsheetLabel,
+    envName: reminderSpreadsheetIdOption ? 'GOOGLE_PAYMENT_REMINDER_SHEET_ID' : 'GOOGLE_SHEET_ID',
+    serviceAccountEmail,
+    write,
+  });
+
+  function checkReminderSpreadsheetId() {
+    if (reminderSpreadsheetIdOption && !looksLikeSpreadsheetId(reminderSpreadsheetIdOption)) {
+      throw new SheetSetupError(`GOOGLE_PAYMENT_REMINDER_SHEET_ID is set to "${reminderSpreadsheetIdOption}", which looks like a name, not a spreadsheet ID. Use the long ID from the sheet's web address (the part between /d/ and /edit), or paste the whole address. Put the tab name in GOOGLE_PAYMENT_REMINDER_SHEET_NAME instead.`);
+    }
+  }
   // "PaymentReminders", "Payment Reminders " and "payment_reminders" all count as the same tab.
   const sameTitle = (left, right) => normalize(left).replace(/[^a-z0-9]/g, '') === normalize(right).replace(/[^a-z0-9]/g, '');
 
   async function findReminderTab(sheets) {
-    const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties.title' });
+    const { data } = await sheets.spreadsheets.get({ spreadsheetId: reminderSpreadsheetId, fields: 'sheets.properties.title' });
     const titles = (data.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
     return { title: titles.find((title) => title === reminderSheetName) || titles.find((title) => sameTitle(title, reminderSheetName)) || '', titles };
   }
 
   // Reads the tab by heading name, so column order and heading spelling don't matter.
   async function readReminderTab(sheets, title) {
-    const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quoteSheetName(title)}!A:Z`, valueRenderOption: 'FORMATTED_VALUE' });
+    const response = await sheets.spreadsheets.values.get({ spreadsheetId: reminderSpreadsheetId, range: `${quoteSheetName(title)}!A:Z`, valueRenderOption: 'FORMATTED_VALUE' });
     const [headerRow = [], ...rows] = response.data.values || [];
     const headers = headerRow.map((header) => canonicalReminderHeader(header));
     const reminders = rows
@@ -432,11 +459,12 @@ export function createGoogleSheetStore({
   async function loadReminders() {
     const sheets = getSheetsClient();
     try {
+      checkReminderSpreadsheetId();
       const { title, titles } = await findReminderTab(sheets);
       if (!title) {
         return {
           reminders: [],
-          notice: `No "${reminderSheetName}" tab was found in the client spreadsheet, so there are no reminders to show. Tabs found: ${titles.map((name) => `"${name}"`).join(', ') || 'none'}. The tab is created automatically when you add the first name, or you can import it there.`,
+          notice: `No "${reminderSheetName}" tab was found in the ${reminderSpreadsheetLabel} spreadsheet, so there are no reminders to show. Tabs found: ${titles.map((name) => `"${name}"`).join(', ') || 'none'}. The tab is created automatically when you add the first name, or you can import it there.`,
         };
       }
       const { headers, rows, reminders } = await readReminderTab(sheets, title);
@@ -451,9 +479,10 @@ export function createGoogleSheetStore({
 
   // Creates the tab if needed and appends any missing headings after the existing ones.
   async function prepareReminderTab(sheets) {
+    checkReminderSpreadsheetId();
     let { title } = await findReminderTab(sheets);
     if (!title) {
-      await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: reminderSheetName } } }] } });
+      await sheets.spreadsheets.batchUpdate({ spreadsheetId: reminderSpreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: reminderSheetName } } }] } });
       title = reminderSheetName;
     }
     const tab = await readReminderTab(sheets, title);
@@ -463,7 +492,7 @@ export function createGoogleSheetStore({
       const start = headers.length + 1;
       headers.push(...missing);
       await sheets.spreadsheets.values.update({
-        spreadsheetId,
+        spreadsheetId: reminderSpreadsheetId,
         range: `${quoteSheetName(title)}!${columnLetters(start)}1:${columnLetters(headers.length)}1`,
         valueInputOption: 'RAW',
         requestBody: { values: [missing] },
@@ -481,7 +510,7 @@ export function createGoogleSheetStore({
       const reminder = { ...input, id: nextReminderId(reminders) };
       const cells = reminderCells(reminder);
       const row = headers.map((header) => cells[header] ?? '');
-      await sheets.spreadsheets.values.append({ spreadsheetId, range: `${quoteSheetName(title)}!A:${columnLetters(headers.length)}`, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [row] } });
+      await sheets.spreadsheets.values.append({ spreadsheetId: reminderSpreadsheetId, range: `${quoteSheetName(title)}!A:${columnLetters(headers.length)}`, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [row] } });
       return reminder;
     } catch (error) {
       throw explainGoogleError(error, reminderContext(true));
@@ -498,7 +527,7 @@ export function createGoogleSheetStore({
       const reminder = { ...input, id };
       const cells = reminderCells(reminder);
       await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId,
+        spreadsheetId: reminderSpreadsheetId,
         requestBody: {
           valueInputOption: 'RAW',
           data: REMINDER_HEADERS.map((header) => ({
@@ -529,6 +558,43 @@ export function createGoogleSheetStore({
       .map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ''])))
       .map(mapWorkPermit)
       .filter((record) => record.id && record.name);
+  }
+
+  async function addWorkPermit(input) {
+    const sheets = getSheetsClient();
+    const context = { label: 'work permit', envName: 'GOOGLE_WORK_PERMIT_SHEET_ID', serviceAccountEmail, write: true };
+    try {
+      const title = await resolveTab(sheets, workPermitSpreadsheetId, workPermitSheetName, 'work permit');
+      const quoted = quoteSheetName(title);
+      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: workPermitSpreadsheetId, range: `${quoted}!A:Z`, valueRenderOption: 'FORMATTED_VALUE' });
+      const values = data.values || [];
+      const headers = (values[0] || []).map((header) => String(header ?? '').trim());
+      const missing = WORK_PERMIT_HEADERS.filter((header) => !headers.includes(header));
+      if (missing.length) {
+        const start = headers.length + 1;
+        headers.push(...missing);
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: workPermitSpreadsheetId,
+          range: `${quoted}!${columnLetters(start)}1:${columnLetters(headers.length)}1`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [missing] },
+        });
+      }
+      const existing = values.slice(1).map((row) => mapWorkPermit(Object.fromEntries(headers.map((header, index) => [header, row[index] ?? '']))));
+      const record = newWorkPermit(input, existing);
+      const cells = workPermitCells(record);
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: workPermitSpreadsheetId,
+        range: `${quoted}!A:${columnLetters(headers.length)}`,
+        valueInputOption: 'RAW',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: { values: [headers.map((header) => cells[header] ?? '')] },
+      });
+      return record;
+    } catch (error) {
+      resolvedTitles.delete(`${workPermitSpreadsheetId}|${workPermitSheetName}`);
+      throw explainGoogleError(error, context);
+    }
   }
 
   async function updateWorkPermit(id, mutate) {
@@ -581,6 +647,11 @@ export function createGoogleSheetStore({
     workPermits: {
       configured: async () => Boolean(workPermitSpreadsheetId),
       list: listWorkPermits,
+      add: (input) => {
+        const operation = queuedWrite.then(() => addWorkPermit(input));
+        queuedWrite = operation.catch(() => {});
+        return operation;
+      },
       update: (id, mutate) => {
         const operation = queuedWrite.then(() => updateWorkPermit(id, mutate));
         queuedWrite = operation.catch(() => {});

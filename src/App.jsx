@@ -747,7 +747,7 @@ function PermitStatus({ status }) {
 
 const emptyPermitForm = { name: '', note: '', section: 'Regular', filingDate: '', pausedDays: 0, i765FiledDate: '', receiptNumber: '', decision: 'Pending', approvedDate: '', expiryDate: '' };
 
-function WorkPermitList({ onToast }) {
+function WorkPermitList({ clients = [], onToast }) {
   const [records, setRecords] = useState([]);
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState('');
@@ -770,6 +770,12 @@ function WorkPermitList({ onToast }) {
     return result;
   }
 
+  function startAdd() {
+    setEditing('new');
+    setForm(emptyPermitForm);
+    setFormError('');
+  }
+
   function startEdit(record) {
     setEditing(record.id);
     setForm({
@@ -790,10 +796,15 @@ function WorkPermitList({ onToast }) {
     setSaving(true);
     setFormError('');
     try {
-      const result = await send(`/api/work-permits/${encodeURIComponent(editing)}`, { method: 'PUT', body: JSON.stringify({ ...form, pausedDays: Number(form.pausedDays || 0) }) });
-      replace(result.workPermit);
+      const isNew = editing === 'new';
+      const body = JSON.stringify({ ...form, pausedDays: Number(form.pausedDays || 0) });
+      const result = isNew
+        ? await send('/api/work-permits', { method: 'POST', body })
+        : await send(`/api/work-permits/${encodeURIComponent(editing)}`, { method: 'PUT', body });
+      if (isNew) setRecords((current) => [...current, result.workPermit]);
+      else replace(result.workPermit);
       setEditing(null);
-      onToast(`${result.workPermit.name} updated`);
+      onToast(`${result.workPermit.name} ${isNew ? `added as ${result.workPermit.id}` : 'updated'}`);
     } catch (saveError) {
       setFormError(saveError.message);
     } finally {
@@ -863,6 +874,10 @@ function WorkPermitList({ onToast }) {
   const visible = records.filter((record) => (section === 'All' || record.section === section) && matchesStage(record)
     && (!query || [record.id, record.name, record.note, record.receiptNumber || ''].some((value) => value.toLowerCase().includes(query))));
   const pendingCount = records.filter((record) => record.section === 'Pending').length;
+  // Warns (without blocking) when adding someone who already has a work permit record.
+  const duplicate = editing && form.name.trim()
+    ? records.find((record) => record.id !== editing && normalizeClientName(record.name) === normalizeClientName(form.name))
+    : null;
   const actionCount = records.filter((record) => ACTION_STAGES.includes(stageOf(record))).length;
   const activeCount = records.filter((record) => ['active', 'renewal-due'].includes(stageOf(record))).length;
   const emptyMessage = status === 'loading'
@@ -875,7 +890,7 @@ function WorkPermitList({ onToast }) {
 
   return (
     <>
-      <div className="welcome-row roster-heading"><div><span className="eyebrow">WORK PERMITS · {records.length} RECORDS · {actionCount} NEED ACTION · {activeCount} WITH WORK PERMIT · {pendingCount} PENDING</span><h1>Work permit tracker</h1><p className="page-subtitle">{visible.length} records shown</p></div></div>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">WORK PERMITS · {records.length} RECORDS · {actionCount} NEED ACTION · {activeCount} WITH WORK PERMIT · {pendingCount} PENDING</span><h1>Work permit tracker</h1><p className="page-subtitle">{visible.length} records shown</p></div><button className="button button-primary" onClick={startAdd} disabled={status !== 'ready'}><Plus size={16} />Add client</button></div>
       {shared && <div className="surface share-panel" role="status">
         <div><strong>{shared.copied ? 'Link copied' : 'Copy this link'} for {shared.name}</strong><span>Anyone with this link can see this client's 150-day progress. Internal notes stay hidden.</span></div>
         <input readOnly value={shared.url} onFocus={(event) => event.target.select()} aria-label={`Tracking link for ${shared.name}`} />
@@ -883,7 +898,8 @@ function WorkPermitList({ onToast }) {
       </div>}
       {editing && <form className="surface reminder-form" onSubmit={save}>
         <div className="form-grid">
-          <label className="field">Client name<input name="name" value={form.name} onChange={update} maxLength={200} required autoFocus /></label>
+          <label className="field">Client name<NameSuggest value={form.name} clients={clients} onChange={(name) => setForm((current) => ({ ...current, name }))} onPick={(client) => setForm((current) => ({ ...current, name: client.name }))} />
+            {duplicate && <span className="field-hint">Already in work permits as {duplicate.id}.</span>}</label>
           <label className="field">Section<select name="section" value={form.section} onChange={update}><option>Regular</option><option>Pending</option></select><ChevronDown size={15} /></label>
           <div className="form-section-title field-wide"><span>01</span><h3>Asylum clock</h3></div>
           <label className="field">Init Asylum Rec'd Date (I-589) — starts the EAD clock<input type="date" name="filingDate" value={form.filingDate} onChange={update} /></label>
@@ -899,7 +915,7 @@ function WorkPermitList({ onToast }) {
           <label className="field field-wide">Internal note (never shown to the client)<textarea name="note" value={form.note} onChange={update} rows={3} maxLength={2000} /></label>
         </div>
         {formError && <div className="form-error" role="alert">{formError}</div>}
-        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setEditing(null)}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : 'Save changes'}</button></div>
+        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setEditing(null)}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : editing === 'new' ? 'Add client' : 'Save changes'}</button></div>
       </form>}
       <section className="surface roster-surface">
         <div className="roster-toolbar">
@@ -1253,7 +1269,7 @@ export default function App() {
             : page === 'clients'
               ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} />
               : page === 'work-permits'
-                ? <WorkPermitList onToast={setToast} />
+                ? <WorkPermitList clients={clients} onToast={setToast} />
               : page === 'payments'
                 ? <PaymentReminders clients={clients} />
               : page === 'court-dates' || resultView === 'court-dates'

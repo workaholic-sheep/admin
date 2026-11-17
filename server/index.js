@@ -3,7 +3,7 @@ import { rateLimit } from 'express-rate-limit';
 import { stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SheetSetupError, createGoogleSheetStore } from './google-sheets.js';
+import { SheetSetupError, createGoogleSheetStore, spreadsheetIdFrom } from './google-sheets.js';
 import { createSessionAuth } from './session-auth.js';
 import { createReminderWorkbookStore } from './payment-reminders.js';
 import { createWorkbookStore } from './workbook.js';
@@ -31,13 +31,14 @@ if (production && !process.env.GOOGLE_COURT_SHEET_ID) {
 const sourceName = useGoogleSheets ? 'Google Sheets' : 'Excel';
 const store = useGoogleSheets
   ? createGoogleSheetStore({
-    spreadsheetId: process.env.GOOGLE_SHEET_ID,
+    spreadsheetId: spreadsheetIdFrom(process.env.GOOGLE_SHEET_ID),
     sheetName: process.env.GOOGLE_SHEET_NAME || 'MasterData',
-    courtSpreadsheetId: process.env.GOOGLE_COURT_SHEET_ID,
+    courtSpreadsheetId: spreadsheetIdFrom(process.env.GOOGLE_COURT_SHEET_ID),
     courtSheetName: process.env.GOOGLE_COURT_SHEET_NAME || 'COURT DATE LIST',
-    workPermitSpreadsheetId: process.env.GOOGLE_WORK_PERMIT_SHEET_ID,
+    workPermitSpreadsheetId: spreadsheetIdFrom(process.env.GOOGLE_WORK_PERMIT_SHEET_ID),
     workPermitSheetName: process.env.GOOGLE_WORK_PERMIT_SHEET_NAME || 'WorkPermits',
     reminderSheetName: process.env.GOOGLE_PAYMENT_REMINDER_SHEET_NAME || 'PaymentReminders',
+    reminderSpreadsheetId: spreadsheetIdFrom(process.env.GOOGLE_PAYMENT_REMINDER_SHEET_ID),
     serviceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     privateKey: process.env.GOOGLE_PRIVATE_KEY,
   })
@@ -155,6 +156,33 @@ function staffWorkPermit(record) {
   return { ...rest, hasLink: Boolean(trackingToken), status: workPermitStatus(record) };
 }
 
+// Validates the fields staff can set on a work permit; shared by add and edit.
+function workPermitInput(body = {}) {
+  const name = String(body.name || '').trim();
+  const note = String(body.note || '').trim();
+  const section = String(body.section || 'Regular').trim();
+  const pausedDays = Number(body.pausedDays || 0);
+  const receiptNumber = String(body.receiptNumber || '').trim().toUpperCase();
+  const decision = DECISIONS.includes(body.decision) ? body.decision : 'Pending';
+  const dates = {};
+  for (const [field, label] of [['filingDate', "Init Asylum Rec'd Date"], ['i765FiledDate', 'I-765 filing date'], ['approvedDate', 'approval date'], ['expiryDate', 'expiry date']]) {
+    const value = String(body[field] || '').trim();
+    if (value && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`)))) return { error: `Enter a valid ${label}.` };
+    dates[field] = value;
+  }
+  if (!name) return { error: 'Client name is required.' };
+  if (name.length > 200) return { error: 'Client name must be 200 characters or fewer.' };
+  if (note.length > 2000) return { error: 'Note must be 2,000 characters or fewer.' };
+  if (!['Regular', 'Pending'].includes(section)) return { error: 'Section must be Regular or Pending.' };
+  if (!Number.isInteger(pausedDays) || pausedDays < 0 || pausedDays > 3650) return { error: 'Days paused must be a whole number of 0 or more.' };
+  if (receiptNumber && !/^[A-Z0-9]{5,20}$/.test(receiptNumber)) return { error: 'Receipt number should be letters and numbers only, like IOE0123456789.' };
+  if (dates.i765FiledDate && dates.filingDate && dates.i765FiledDate < dates.filingDate) return { error: 'The I-765 cannot be filed before the asylum application.' };
+  if (decision !== 'Pending' && !dates.i765FiledDate) return { error: 'Add the I-765 filing date before recording a decision.' };
+  if (decision === 'Approved' && !dates.expiryDate) return { error: 'Add the card expiry date for an approved work permit.' };
+  if (dates.approvedDate && dates.expiryDate && dates.expiryDate <= dates.approvedDate) return { error: 'The expiry date must be after the approval date.' };
+  return { value: { name, note, section, ...dates, pausedDays, receiptNumber, decision } };
+}
+
 async function requireWorkPermits(response) {
   if (await workPermitStore.configured()) return true;
   response.status(409).json({ error: 'Work permit data is not connected.' });
@@ -172,46 +200,30 @@ app.get('/api/work-permits', async (_request, response, next) => {
 });
 
 app.put('/api/work-permits/:id', async (request, response, next) => {
-  const body = request.body || {};
-  const name = String(body.name || '').trim();
-  const note = String(body.note || '').trim();
-  const section = String(body.section || '').trim();
-  const pausedDays = Number(body.pausedDays || 0);
-  const receiptNumber = String(body.receiptNumber || '').trim().toUpperCase();
-  const decision = DECISIONS.includes(body.decision) ? body.decision : 'Pending';
-  const dates = {};
-  for (const [field, label] of [['filingDate', "Init Asylum Rec'd Date"], ['i765FiledDate', 'I-765 filing date'], ['approvedDate', 'approval date'], ['expiryDate', 'expiry date']]) {
-    const value = String(body[field] || '').trim();
-    if (value && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`)))) {
-      return response.status(400).json({ error: `Enter a valid ${label}.` });
-    }
-    dates[field] = value;
-  }
-  if (!name) return response.status(400).json({ error: 'Client name is required.' });
-  if (name.length > 200) return response.status(400).json({ error: 'Client name must be 200 characters or fewer.' });
-  if (note.length > 2000) return response.status(400).json({ error: 'Note must be 2,000 characters or fewer.' });
-  if (!['Regular', 'Pending'].includes(section)) return response.status(400).json({ error: 'Section must be Regular or Pending.' });
-  if (!Number.isInteger(pausedDays) || pausedDays < 0 || pausedDays > 3650) return response.status(400).json({ error: 'Days paused must be a whole number of 0 or more.' });
-  if (receiptNumber && !/^[A-Z0-9]{5,20}$/.test(receiptNumber)) return response.status(400).json({ error: 'Receipt number should be letters and numbers only, like IOE0123456789.' });
-  if (dates.i765FiledDate && dates.filingDate && dates.i765FiledDate < dates.filingDate) return response.status(400).json({ error: 'The I-765 cannot be filed before the asylum application.' });
-  if (decision !== 'Pending' && !dates.i765FiledDate) return response.status(400).json({ error: 'Add the I-765 filing date before recording a decision.' });
-  if (decision === 'Approved' && !dates.expiryDate) return response.status(400).json({ error: 'Add the card expiry date for an approved work permit.' });
-  if (dates.approvedDate && dates.expiryDate && dates.expiryDate <= dates.approvedDate) return response.status(400).json({ error: 'The expiry date must be after the approval date.' });
+  const input = workPermitInput(request.body);
+  if (input.error) return response.status(400).json({ error: input.error });
+  const { value } = input;
   try {
     if (!(await requireWorkPermits(response))) return;
     const record = await workPermitStore.update(request.params.id, (current) => ({
       ...current,
-      name,
-      note,
-      section,
-      ...dates,
-      pausedDays,
-      receiptNumber,
-      decision,
+      ...value,
       // The clock can't stay paused without a start date or once a decision is made.
-      ...(dates.filingDate && decision === 'Pending' ? {} : { clockStatus: 'Running', pausedSince: '' }),
+      ...(value.filingDate && value.decision === 'Pending' ? {} : { clockStatus: 'Running', pausedSince: '' }),
     }));
     response.json({ workPermit: staffWorkPermit(record) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/work-permits', async (request, response, next) => {
+  const input = workPermitInput(request.body);
+  if (input.error) return response.status(400).json({ error: input.error });
+  try {
+    if (!(await requireWorkPermits(response))) return;
+    const record = await workPermitStore.add(input.value);
+    response.status(201).json({ workPermit: staffWorkPermit(record) });
   } catch (error) {
     next(error);
   }
