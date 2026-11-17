@@ -137,7 +137,7 @@ export function workPermitStatus(record, today = centralToday()) {
     return filed;
   }
 
-  if (!clock) return { ...base, stage: 'not-started', label: 'Needs I-589 date' };
+  if (!clock) return { ...base, stage: 'not-started', label: "Needs Init Asylum Rec'd Date" };
   if (clock.counted >= FILE_AFTER_DAYS) return { ...base, stage: 'ready-to-file', label: 'Ready to file I-765' };
   return {
     ...base,
@@ -148,7 +148,7 @@ export function workPermitStatus(record, today = centralToday()) {
 }
 
 export function pauseClock(record, today = centralToday()) {
-  if (!record.filingDate) throw new WorkPermitError('Add the asylum (I-589) filing date before pausing the clock.');
+  if (!record.filingDate) throw new WorkPermitError("Add the Init Asylum Rec'd Date before pausing the clock.");
   if (record.decision !== 'Pending') throw new WorkPermitError('The asylum clock no longer applies once the work permit is decided.');
   if (record.clockStatus === 'Paused') throw new WorkPermitError('The clock is already paused.', 409);
   return { ...record, clockStatus: 'Paused', pausedSince: today };

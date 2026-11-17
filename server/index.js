@@ -180,7 +180,7 @@ app.put('/api/work-permits/:id', async (request, response, next) => {
   const receiptNumber = String(body.receiptNumber || '').trim().toUpperCase();
   const decision = DECISIONS.includes(body.decision) ? body.decision : 'Pending';
   const dates = {};
-  for (const [field, label] of [['filingDate', 'asylum (I-589) filing date'], ['i765FiledDate', 'I-765 filing date'], ['approvedDate', 'approval date'], ['expiryDate', 'expiry date']]) {
+  for (const [field, label] of [['filingDate', "Init Asylum Rec'd Date"], ['i765FiledDate', 'I-765 filing date'], ['approvedDate', 'approval date'], ['expiryDate', 'expiry date']]) {
     const value = String(body[field] || '').trim();
     if (value && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`)))) {
       return response.status(400).json({ error: `Enter a valid ${label}.` });

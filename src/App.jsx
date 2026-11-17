@@ -699,7 +699,7 @@ const shortDate = (value) => formatDate(value, { month: 'short', day: 'numeric',
 
 function permitDetail(status) {
   const { stage, countdown, clock } = status;
-  if (stage === 'not-started') return 'Add the asylum (I-589) filing date';
+  if (stage === 'not-started') return "Add the Init Asylum Rec'd Date";
   if (stage === 'waiting') return clock?.paused
     ? `${countdown.days} days to file · paused since ${shortDate(clock.pausedSince)}`
     : `${countdown.days} days to file · ${shortDate(countdown.date)}`;
@@ -711,6 +711,21 @@ function permitDetail(status) {
   if (stage === 'renewal-due') return `${countdown.days} days left · file the renewal now`;
   if (stage === 'expired') return `Expired ${shortDate(status.expiryDate)} · not authorized to work`;
   return 'Work permit denied · contact the client';
+}
+
+// Mirrors the two EOIR clock lines: "EAD Clock is running / N Days Elapsed" and "Init Asylum Rec'd Date".
+function EadClock({ status }) {
+  const clock = status?.clock;
+  const usDate = (value) => {
+    const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? `${match[2]}/${match[3]}/${match[1]}` : '—';
+  };
+  return (
+    <dl className={`ead-clock ${clock?.paused ? 'is-stopped' : ''}`}>
+      <div><dt>{clock ? `EAD Clock is ${clock.paused ? 'stopped' : 'running'}:` : 'EAD Clock:'}</dt><dd>{clock ? `${clock.counted} Days Elapsed` : 'No Clock'}</dd></div>
+      <div><dt>Init Asylum Rec'd Date:</dt><dd>{usDate(status?.filingDate)}</dd></div>
+    </dl>
+  );
 }
 
 function PermitStatus({ status }) {
@@ -871,7 +886,7 @@ function WorkPermitList({ onToast }) {
           <label className="field">Client name<input name="name" value={form.name} onChange={update} maxLength={200} required autoFocus /></label>
           <label className="field">Section<select name="section" value={form.section} onChange={update}><option>Regular</option><option>Pending</option></select><ChevronDown size={15} /></label>
           <div className="form-section-title field-wide"><span>01</span><h3>Asylum clock</h3></div>
-          <label className="field">Asylum (I-589) filed — starts the clock<input type="date" name="filingDate" value={form.filingDate} onChange={update} /></label>
+          <label className="field">Init Asylum Rec'd Date (I-589) — starts the EAD clock<input type="date" name="filingDate" value={form.filingDate} onChange={update} /></label>
           <label className="field">Days paused so far<input type="number" name="pausedDays" min="0" max="3650" step="1" value={form.pausedDays} onChange={update} /><span className="field-hint">Applicant-caused delays don't count toward 150/180 days.</span></label>
           <div className="form-section-title field-wide"><span>02</span><h3>Work permit (I-765)</h3></div>
           <label className="field">I-765 filed<input type="date" name="i765FiledDate" value={form.i765FiledDate} onChange={update} /></label>
@@ -892,7 +907,7 @@ function WorkPermitList({ onToast }) {
           <FilterMenu label="Status" value={stageFilter} onChange={setStageFilter} icon={CalendarClock} options={[
             { value: 'all', label: 'All statuses' },
             { value: 'action', label: 'Needs action' },
-            { value: 'not-started', label: 'Needs I-589 date' },
+            { value: 'not-started', label: "Needs Init Asylum Rec'd Date" },
             { value: 'waiting', label: 'Waiting – asylum clock' },
             { value: 'ready-to-file', label: 'Ready to file I-765' },
             { value: 'filed', label: 'I-765 pending' },
@@ -903,18 +918,18 @@ function WorkPermitList({ onToast }) {
           ]} />
           <FilterMenu label="Section" value={section} onChange={setSection} icon={SlidersHorizontal} options={[{ value: 'All', label: 'All sections' }, { value: 'Regular', label: 'Regular' }, { value: 'Pending', label: 'Pending' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table work-permit-table"><thead><tr><th>ID</th><th>Client</th><th>Note</th><th>Section</th><th>Status &amp; countdown</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>
+        <div className="table-scroll"><table className="client-table work-permit-table"><thead><tr><th>ID</th><th>Client</th><th>Note</th><th>Section</th><th>EAD clock</th><th>Status &amp; countdown</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>
           {visible.map((record) => {
             const paused = record.clockStatus === 'Paused';
             const busy = busyId === record.id;
-            return <tr key={record.id}><td>{record.id}</td><td><strong>{record.name}</strong></td><td>{record.note || <span className="muted">No note</span>}</td><td><span className={`status ${record.section === 'Pending' ? 'status-caution' : 'status-neutral'}`}><i />{record.section || 'Not set'}</span></td><td><PermitStatus status={record.status} /></td>
+            return <tr key={record.id}><td>{record.id}</td><td><strong>{record.name}</strong></td><td>{record.note || <span className="muted">No note</span>}</td><td><span className={`status ${record.section === 'Pending' ? 'status-caution' : 'status-neutral'}`}><i />{record.section || 'Not set'}</span></td><td><EadClock status={record.status} /></td><td><PermitStatus status={record.status} /></td>
               <td><span className="row-actions">
                 <button className="icon-button" onClick={() => startEdit(record)} aria-label={`Edit ${record.name}`} title="Edit"><Pencil size={14} /></button>
-                <button className={`button button-secondary clock-button ${paused ? 'is-paused' : ''}`} onClick={() => toggleClock(record)} disabled={busy || !record.filingDate || record.decision !== 'Pending'} title={!record.filingDate ? 'Add the I-589 filing date first' : record.decision !== 'Pending' ? 'The clock no longer applies after a decision' : ''}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? 'Resume' : 'Pause'}</button>
+                <button className={`button button-secondary clock-button ${paused ? 'is-paused' : ''}`} onClick={() => toggleClock(record)} disabled={busy || !record.filingDate || record.decision !== 'Pending'} title={!record.filingDate ? "Add the Init Asylum Rec'd Date first" : record.decision !== 'Pending' ? 'The clock no longer applies after a decision' : ''}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? 'Resume' : 'Pause'}</button>
                 <button className="button button-secondary" onClick={() => copyLink(record)} disabled={busy}><Link2 size={14} />Copy link</button>
               </span></td></tr>;
           })}
-          {!visible.length && <tr><td colSpan="6"><div className="table-empty"><Briefcase size={22} /><strong>{emptyMessage[0]}</strong>{emptyMessage[1] && <span>{emptyMessage[1]}</span>}</div></td></tr>}
+          {!visible.length && <tr><td colSpan="7"><div className="table-empty"><Briefcase size={22} /><strong>{emptyMessage[0]}</strong>{emptyMessage[1] && <span>{emptyMessage[1]}</span>}</div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visible.length} of {records.length} records</span><span><i className="sync-dot" /> Saved to WorkPermits</span></div>
       </section>
