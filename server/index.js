@@ -5,11 +5,14 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGoogleSheetStore } from './google-sheets.js';
 import { createSessionAuth } from './session-auth.js';
+import { createReminderWorkbookStore } from './payment-reminders.js';
 import { createWorkbookStore } from './workbook.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const workbookPath = resolve(process.env.WORKBOOK_PATH || resolve(root, "Prototype of Client's Tracker .xlsx"));
 const courtWorkbookPath = resolve(process.env.COURT_WORKBOOK_PATH || resolve(root, 'Prototype of Reports.xlsx'));
+const workPermitWorkbookPath = resolve(process.env.WORK_PERMIT_WORKBOOK_PATH || resolve(root, 'BBeckford_WorkPermit_Database.xlsx'));
+const reminderWorkbookPath = resolve(process.env.PAYMENT_REMINDER_WORKBOOK_PATH || resolve(root, 'BBeckford_PaymentReminders.xlsx'));
 const port = Number(process.env.PORT || 3001);
 const production = process.env.NODE_ENV === 'production';
 const useGoogleSheets = process.env.DATA_SOURCE === 'google-sheets' || Boolean(process.env.GOOGLE_SHEET_ID);
@@ -29,10 +32,14 @@ const store = useGoogleSheets
     sheetName: process.env.GOOGLE_SHEET_NAME || 'MasterData',
     courtSpreadsheetId: process.env.GOOGLE_COURT_SHEET_ID,
     courtSheetName: process.env.GOOGLE_COURT_SHEET_NAME || 'COURT DATE LIST',
+    workPermitSpreadsheetId: process.env.GOOGLE_WORK_PERMIT_SHEET_ID,
+    workPermitSheetName: process.env.GOOGLE_WORK_PERMIT_SHEET_NAME || 'WorkPermits',
+    reminderSheetName: process.env.GOOGLE_PAYMENT_REMINDER_SHEET_NAME || 'PaymentReminders',
     serviceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     privateKey: process.env.GOOGLE_PRIVATE_KEY,
   })
-  : createWorkbookStore(workbookPath, courtWorkbookPath);
+  : createWorkbookStore(workbookPath, courtWorkbookPath, workPermitWorkbookPath);
+const reminderStore = useGoogleSheets ? store.reminders : createReminderWorkbookStore(reminderWorkbookPath);
 const sessionAuth = createSessionAuth({
   enabled: production,
   password: process.env.APP_PASSWORD,
@@ -109,6 +116,66 @@ app.get('/api/court-dates', async (_request, response, next) => {
     response.json({ courtDates, modifiedAt, source: sourceName });
   } catch (error) {
     next(error);
+  }
+});
+
+app.get('/api/work-permits', async (_request, response, next) => {
+  const notConfigured = { workPermits: [], configured: false, source: sourceName };
+  if (!store.workPermitsConfigured) return response.json(notConfigured);
+  if (!useGoogleSheets && !(await stat(workPermitWorkbookPath).catch(() => null))) return response.json(notConfigured);
+  try {
+    const workPermits = await store.listWorkPermits();
+    const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workPermitWorkbookPath)).mtime.toISOString();
+    response.json({ workPermits, configured: true, modifiedAt, source: sourceName });
+  } catch (error) {
+    if (error.message.includes('tab was not found')) return response.status(500).json({ error: error.message });
+    next(error);
+  }
+});
+
+function reminderInput(body = {}) {
+  const name = String(body.name || '').trim();
+  const responded = body.responded === 'Yes' ? 'Yes' : 'No';
+  const response = responded === 'Yes' ? String(body.response || '').trim() : '';
+  const respondedAt = responded === 'Yes' ? String(body.respondedAt || '').trim().replace('T', ' ') : '';
+  if (!name) return { error: 'Name is required.' };
+  if (name.length > 200) return { error: 'Name must be 200 characters or fewer.' };
+  if (response.length > 2000) return { error: 'Response must be 2,000 characters or fewer.' };
+  if (respondedAt && !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(respondedAt)) return { error: 'Enter a valid response date and time.' };
+  return { value: { name, responded, response, respondedAt } };
+}
+
+function reminderError(error, response, next) {
+  if (error.message === 'Reminder not found.') return response.status(404).json({ error: error.message });
+  if (error.message.includes('locked by Excel')) return response.status(423).json({ error: error.message });
+  return next(error);
+}
+
+app.get('/api/payment-reminders', async (_request, response, next) => {
+  try {
+    response.json({ reminders: await reminderStore.list(), source: sourceName });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/payment-reminders', async (request, response, next) => {
+  const input = reminderInput(request.body);
+  if (input.error) return response.status(400).json({ error: input.error });
+  try {
+    response.status(201).json({ reminder: await reminderStore.add(input.value) });
+  } catch (error) {
+    reminderError(error, response, next);
+  }
+});
+
+app.put('/api/payment-reminders/:reminderId', async (request, response, next) => {
+  const input = reminderInput(request.body);
+  if (input.error) return response.status(400).json({ error: input.error });
+  try {
+    response.json({ reminder: await reminderStore.update(request.params.reminderId, input.value) });
+  } catch (error) {
+    reminderError(error, response, next);
   }
 });
 
@@ -212,6 +279,10 @@ if (process.env.NODE_ENV === 'production') {
 
 app.use((error, _request, response, _next) => {
   console.error(error);
+  const missingFile = String(error?.message || '').match(/^File not found: (.+)$/);
+  if (!useGoogleSheets && missingFile) {
+    return response.status(500).json({ error: `Workbook not found: ${missingFile[1].split(/[\\/]/).pop()}. Add it to the project folder.` });
+  }
   const message = useGoogleSheets
     ? 'Google Sheets could not be read or updated. Check the spreadsheet ID, service-account access, and Render environment variables.'
     : 'The workbook could not be read or updated. Close it in Excel and try again.';

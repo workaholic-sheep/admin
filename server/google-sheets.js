@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
-import { mapMasterData } from './workbook.js';
+import { mapMasterData, mapWorkPermit } from './workbook.js';
+import { REMINDER_HEADERS, REMINDER_SHEET, mapReminder, nextReminderId, reminderRow } from './payment-reminders.js';
 
 const SHEET_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const normalize = (value) => String(value ?? '').trim().toLowerCase();
@@ -64,6 +65,9 @@ export function createGoogleSheetStore({
   sheetName = 'MasterData',
   courtSpreadsheetId = '',
   courtSheetName = 'COURT DATE LIST',
+  workPermitSpreadsheetId = '',
+  workPermitSheetName = 'WorkPermits',
+  reminderSheetName = REMINDER_SHEET,
   serviceAccountEmail,
   privateKey,
 }, api = google) {
@@ -152,13 +156,14 @@ export function createGoogleSheetStore({
     });
     const values = response.data.values || [];
     if (!values.length) return [];
-    const headers = values[0].map((header) => normalize(header));
+    const rawHeaders = values[0].map((header) => String(header ?? '').trim());
+    const headers = rawHeaders.map((header) => normalize(header));
     const index = (label) => headers.indexOf(normalize(label));
     const nameIndex = index('NAME');
     const courtDateIndex = index('COURT DATE');
     const rescheduleIndex = index('RESCHEDULE DATE');
-    const noteIndex = headers.findIndex((header) => header.trim() === 'Note');
-    const additionalNoteIndex = headers.findIndex((header) => header.trim() === 'NOTE');
+    const noteIndex = rawHeaders.indexOf('Note');
+    const additionalNoteIndex = rawHeaders.indexOf('NOTE');
     const records = [];
     for (let rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
       const row = values[rowIndex];
@@ -351,9 +356,84 @@ export function createGoogleSheetStore({
     };
   }
 
+  const quotedReminderSheet = quoteSheetName(reminderSheetName);
+  const isMissingTab = (error) => /Unable to parse range/i.test(String(error?.message || ''));
+
+  async function listReminders() {
+    const sheets = getSheetsClient();
+    let response;
+    try {
+      response = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quotedReminderSheet}!A:E`, valueRenderOption: 'FORMATTED_VALUE' });
+    } catch (error) {
+      if (isMissingTab(error)) return [];
+      throw error;
+    }
+    const [headerRow = [], ...rows] = response.data.values || [];
+    const headers = headerRow.map((header) => String(header ?? '').trim());
+    return rows
+      .map((row, index) => ({ ...mapReminder(Object.fromEntries(headers.map((header, column) => [header, row[column] ?? '']))), rowNumber: index + 2 }))
+      .filter((reminder) => reminder.id && reminder.name);
+  }
+
+  async function ensureReminderSheet(sheets) {
+    const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties.title' });
+    if (data.sheets?.some((sheet) => sheet.properties?.title === reminderSheetName)) return;
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: reminderSheetName } } }] } });
+    await sheets.spreadsheets.values.update({ spreadsheetId, range: `${quotedReminderSheet}!A1:E1`, valueInputOption: 'RAW', requestBody: { values: [REMINDER_HEADERS] } });
+  }
+
+  const strip = ({ rowNumber, ...reminder }) => reminder;
+
+  async function addReminder(input) {
+    const sheets = getSheetsClient();
+    await ensureReminderSheet(sheets);
+    const reminder = { ...input, id: nextReminderId(await listReminders()) };
+    await sheets.spreadsheets.values.append({ spreadsheetId, range: `${quotedReminderSheet}!A:E`, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: [reminderRow(reminder)] } });
+    return reminder;
+  }
+
+  async function updateReminder(id, input) {
+    const sheets = getSheetsClient();
+    const existing = (await listReminders()).find((reminder) => reminder.id === id);
+    if (!existing) throw new Error('Reminder not found.');
+    const reminder = { ...input, id };
+    await sheets.spreadsheets.values.update({ spreadsheetId, range: `${quotedReminderSheet}!A${existing.rowNumber}:E${existing.rowNumber}`, valueInputOption: 'RAW', requestBody: { values: [reminderRow(reminder)] } });
+    return reminder;
+  }
+
+  async function listWorkPermits() {
+    const sheets = getSheetsClient();
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: workPermitSpreadsheetId,
+      range: `${quoteSheetName(workPermitSheetName)}!A:Z`,
+      valueRenderOption: 'FORMATTED_VALUE',
+    });
+    const [headerRow = [], ...rows] = response.data.values || [];
+    const headers = headerRow.map((header) => String(header ?? '').trim());
+    return rows
+      .map((row) => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ''])))
+      .map(mapWorkPermit)
+      .filter((record) => record.id && record.name);
+  }
+
   return {
     list,
     listCourtDates,
+    workPermitsConfigured: Boolean(workPermitSpreadsheetId),
+    listWorkPermits,
+    reminders: {
+      list: async () => (await listReminders()).map(strip),
+      add: (input) => {
+        const operation = queuedWrite.then(() => addReminder(input));
+        queuedWrite = operation.catch(() => {});
+        return operation;
+      },
+      update: (id, input) => {
+        const operation = queuedWrite.then(() => updateReminder(id, input));
+        queuedWrite = operation.catch(() => {});
+        return operation;
+      },
+    },
     add(input) {
       const operation = queuedWrite.then(() => appendClient(input));
       queuedWrite = operation.catch(() => {});

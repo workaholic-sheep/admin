@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   ArrowDownAZ,
+  Briefcase,
   CalendarClock,
   CalendarDays,
   Check,
@@ -81,16 +82,16 @@ function greeting(now) {
   return hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 }
 
-function Metric({ label, value, note, tone, icon: Icon, featured = false }) {
+function Metric({ label, value, note, tone, icon: Icon, featured = false, onClick }) {
   return (
-    <section className={`metric metric-${tone} ${featured ? 'metric-featured' : ''}`}>
+    <button className={`metric metric-${tone} ${featured ? 'metric-featured' : ''}`} type="button" onClick={onClick} aria-label={`${label}: ${value}. ${note}`}>
       <div className="metric-top">
         <span>{label}</span>
         <Icon size={17} strokeWidth={1.8} />
       </div>
       <div className="metric-value">{value}</div>
       <div className="metric-note">{note}</div>
-    </section>
+    </button>
   );
 }
 
@@ -426,7 +427,7 @@ function ClientDetails({ client, courtDates, onClose, onUpdate }) {
   );
 }
 
-function Dashboard({ clients, courtDates, onShowClients, onSelectClient, onCompleteFollowUp, now }) {
+function Dashboard({ clients, courtDates, onShowClients, onShowResults, onSelectClient, onCompleteFollowUp, now }) {
   const today = centralDateKey(now);
   const dueClients = useMemo(() => clients
     .map((client) => ({ ...client, dueIn: daysUntil(client.nextContactDate, today) }))
@@ -455,18 +456,18 @@ function Dashboard({ clients, courtDates, onShowClients, onSelectClient, onCompl
     <>
       <div className="welcome-row"><div><span className="eyebrow">{new Intl.DateTimeFormat('en-US', { timeZone: CENTRAL_TIME_ZONE, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(now).toUpperCase()}</span><h1>{greeting(now)}.</h1><p className="page-subtitle">Here’s the client overview.</p></div><button className="button button-secondary" onClick={onShowClients}>View all clients <ArrowRight size={16} /></button></div>
       <div className="metric-grid">
-        <Metric label="Next follow-up" value={nextFollowUp ? formatDate(nextFollowUp.nextContactDate, { month: 'short', day: 'numeric' }) : '—'} note={nextFollowUp?.name || 'No upcoming follow-up'} tone="blue" icon={CalendarClock} featured />
-        <Metric label="Next court date" value={nextCourtDate ? formatDate(nextCourtDate.date, { month: 'short', day: 'numeric' }) : '—'} note={nextCourtDate?.clientName || 'No upcoming court date'} tone="green" icon={CalendarDays} featured />
-        <Metric label="Total clients" value={clients.length} note="In MasterData" tone="green" icon={UsersRound} />
-        <Metric label="Upcoming this week" value={dueSoon} note="Scheduled in the next 7 days" tone="amber" icon={CalendarClock} />
-        <Metric label="Payments pending" value={pendingPayments} note={`${clients.length ? Math.round((pendingPayments / clients.length) * 100) : 0}% of client roster`} tone="rose" icon={CreditCard} />
-        <Metric label="VAWA" value={caseTypeCounts.VAWA} note="Assigned clients" tone="rose" icon={ShieldCheck} />
-        <Metric label="I-485" value={caseTypeCounts['I-485']} note="Assigned clients" tone="blue" icon={FileCheck2} />
-        <Metric label="I-589" value={caseTypeCounts['I-589']} note="Assigned clients" tone="amber" icon={FileText} />
+        <Metric label="Next follow-up" value={nextFollowUp ? formatDate(nextFollowUp.nextContactDate, { month: 'short', day: 'numeric' }) : '—'} note={nextFollowUp?.name || 'No upcoming follow-up'} tone="blue" icon={CalendarClock} featured onClick={() => onShowResults('follow-ups')} />
+        <Metric label="Next court date" value={nextCourtDate ? formatDate(nextCourtDate.date, { month: 'short', day: 'numeric' }) : '—'} note={nextCourtDate?.clientName || 'No upcoming court date'} tone="green" icon={CalendarDays} featured onClick={() => onShowResults('court-dates')} />
+        <Metric label="Total clients" value={clients.length} note="In MasterData" tone="green" icon={UsersRound} onClick={() => onShowResults('clients')} />
+        <Metric label="Upcoming this week" value={dueSoon} note="Scheduled in the next 7 days" tone="amber" icon={CalendarClock} onClick={() => onShowResults('follow-ups-week')} />
+        <Metric label="Payments pending" value={pendingPayments} note={`${clients.length ? Math.round((pendingPayments / clients.length) * 100) : 0}% of client roster`} tone="rose" icon={CreditCard} onClick={() => onShowResults('payments')} />
+        <Metric label="VAWA" value={caseTypeCounts.VAWA} note="Assigned clients" tone="rose" icon={ShieldCheck} onClick={() => onShowResults('case:VAWA')} />
+        <Metric label="I-485" value={caseTypeCounts['I-485']} note="Assigned clients" tone="blue" icon={FileCheck2} onClick={() => onShowResults('case:I-485')} />
+        <Metric label="I-589" value={caseTypeCounts['I-589']} note="Assigned clients" tone="amber" icon={FileText} onClick={() => onShowResults('case:I-589')} />
       </div>
       <div className="dashboard-grid">
         <section className="surface followup-surface">
-          <div className="section-heading"><div><span className="eyebrow">CLIENT CARE</span><h2>Next follow-ups</h2></div><button className="text-button" onClick={onShowClients}>All clients <ArrowRight size={15} /></button></div>
+          <div className="section-heading"><div><span className="eyebrow">CLIENT CASE</span><h2>Next follow-ups</h2></div><button className="text-button" onClick={onShowClients}>All clients <ArrowRight size={15} /></button></div>
           {nextClients.length ? <div className="followup-list">{nextClients.map((client) => <div className="followup-row" key={client.id || client.email}><button className="followup-open" onClick={() => onSelectClient(client)}><span className="due-marker"><CalendarClock size={17} /></span><span className="followup-person"><strong>{client.name}</strong><small>{client.email || client.frequency || 'No contact details'}</small></span><span className="due-date">{client.dueIn === 0 ? 'Today' : `In ${client.dueIn}d`}<small>{formatDate(client.nextContactDate, { month: 'short', day: 'numeric' })}</small></span><ArrowRight className="row-arrow" size={15} /></button><button className="followup-done" onClick={() => complete(client)} disabled={completingId === client.id} aria-label={`Mark follow-up done for ${client.name}`}><Check size={14} /><span>{completingId === client.id ? 'Saving…' : 'Done'}</span></button></div>)}</div> : <div className="empty-state"><CalendarClock size={22} /><p>No upcoming follow-ups.</p></div>}
         </section>
       </div>
@@ -474,17 +475,247 @@ function Dashboard({ clients, courtDates, onShowClients, onSelectClient, onCompl
   );
 }
 
-function ClientList({ clients, search, onSearch, onSelectClient }) {
+function CourtDateList({ clients, courtDates, error = '', onSelectClient }) {
+  const [when, setWhen] = useState('upcoming');
+  const [search, setSearch] = useState('');
+  const today = centralDateKey();
+  const clientsByName = new Map(clients.map((client) => [normalizeClientName(client.name), client]));
+  const events = courtDates
+    .map((event) => ({ ...event, client: clientsByName.get(normalizeClientName(event.clientName)), dueIn: daysUntil(event.date, today) }))
+    .map((event) => ({ ...event, isUpcoming: event.dueIn !== null && event.dueIn >= 0 && event.status.toLowerCase() !== 'done' }));
+  const upcomingCount = events.filter((event) => event.isUpcoming).length;
+  const query = search.trim().toLowerCase();
+  const visible = events
+    .filter((event) => when === 'all' || (when === 'upcoming' ? event.isUpcoming : !event.isUpcoming))
+    .filter((event) => !query || [event.clientName, event.address, event.judge, event.alienNumber].some((value) => String(value || '').toLowerCase().includes(query)))
+    .sort((left, right) => when === 'upcoming' ? left.date.localeCompare(right.date) : right.date.localeCompare(left.date));
+  const open = (event) => event.client && onSelectClient(event.client);
+  const empty = error
+    ? ['Could not load court dates', error]
+    : !courtDates.length
+      ? ['No court dates found', 'The court date list is empty or not connected.']
+      : ['No matching court dates', when === 'upcoming' ? 'Try “Past” or “All dates”.' : 'Try a different search.'];
+
+  return (
+    <>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">COURT CALENDAR · {upcomingCount} UPCOMING · {events.length} TOTAL</span><h1>Court dates</h1><p className="page-subtitle">{visible.length} court dates shown</p></div></div>
+      <section className="surface roster-surface">
+        <div className="roster-toolbar">
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, location, judge or A-number" aria-label="Search court dates" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+          <FilterMenu label="Show" value={when} onChange={setWhen} icon={CalendarDays} options={[{ value: 'upcoming', label: 'Upcoming' }, { value: 'past', label: 'Past or done' }, { value: 'all', label: 'All dates' }]} />
+        </div>
+        <div className="table-scroll"><table className="client-table court-results-table"><thead><tr><th>Client</th><th>Court date</th><th>Time</th><th>Location</th><th>Judge</th><th>Status</th></tr></thead><tbody>
+          {visible.map((event) => <tr key={event.id} className={event.client ? '' : 'row-static'} onClick={() => open(event)} tabIndex={event.client ? 0 : undefined} onKeyDown={(keyEvent) => keyEvent.key === 'Enter' && open(event)}><td><strong>{event.client?.name || event.clientName}</strong><small>{event.client ? event.client.id : 'Not matched to a client record'}</small></td><td>{formatDate(event.date)}{event.rescheduleDate && <small>Rescheduled</small>}</td><td>{event.time || '—'}</td><td>{event.address || '—'}</td><td>{event.judge || '—'}</td><td>{event.status || '—'}</td></tr>)}
+          {!visible.length && <tr><td colSpan="6"><div className="table-empty"><CalendarDays size={22} /><strong>{empty[0]}</strong><span>{empty[1]}</span></div></td></tr>}
+        </tbody></table></div>
+        <div className="table-foot"><span>Showing {visible.length} of {events.length} court dates</span><span><i className="sync-dot" /> Synced from court list</span></div>
+      </section>
+    </>
+  );
+}
+
+function centralNowInput() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: CENTRAL_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+function formatResponseTime(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!match) return value || '—';
+  const [, year, month, day, hour, minute] = match.map(Number);
+  return `${new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+    .format(new Date(Date.UTC(year, month - 1, day, hour, minute)))} CT`;
+}
+
+const emptyReminder = { name: '', responded: 'No', response: '', respondedAt: '' };
+
+function PaymentReminders({ clients }) {
+  const [reminders, setReminders] = useState([]);
+  const [loadState, setLoadState] = useState('loading');
+  const [loadError, setLoadError] = useState('');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState(emptyReminder);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const listId = useId();
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/payment-reminders')
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load payment reminders.');
+        if (active) { setReminders(result.reminders || []); setLoadState('ready'); }
+      })
+      .catch((error) => { if (active) { setLoadError(error.message); setLoadState('error'); } });
+    return () => { active = false; };
+  }, []);
+
+  function startEdit(reminder) {
+    setEditing(reminder ? reminder.id : 'new');
+    setForm(reminder ? { ...emptyReminder, ...reminder, respondedAt: reminder.respondedAt.replace(' ', 'T') } : emptyReminder);
+    setFormError('');
+  }
+
+  function update(event) {
+    const { name, value } = event.target;
+    setForm((current) => ({
+      ...current,
+      [name]: value,
+      ...(name === 'responded' && value === 'Yes' && !current.respondedAt ? { respondedAt: centralNowInput() } : {}),
+    }));
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setFormError('');
+    try {
+      const isNew = editing === 'new';
+      const response = await fetch(isNew ? '/api/payment-reminders' : `/api/payment-reminders/${encodeURIComponent(editing)}`, {
+        method: isNew ? 'POST' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not save this reminder.');
+      setReminders((current) => isNew ? [...current, result.reminder] : current.map((item) => item.id === result.reminder.id ? result.reminder : item));
+      setEditing(null);
+    } catch (error) {
+      setFormError(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const respondedCount = reminders.filter((reminder) => reminder.responded === 'Yes').length;
+  const query = search.trim().toLowerCase();
+  const visible = reminders
+    .filter((reminder) => filter === 'all' || (filter === 'responded' ? reminder.responded === 'Yes' : reminder.responded !== 'Yes'))
+    .filter((reminder) => !query || [reminder.name, reminder.response].some((value) => value.toLowerCase().includes(query)));
+  const empty = loadState === 'loading' ? ['Loading reminders…', '']
+    : loadState === 'error' ? ['Could not load reminders', loadError]
+      : !reminders.length ? ['No reminders yet', 'Use “Add name” to log each client you reminded.']
+        : ['No matching reminders', 'Try a different search or filter.'];
+
+  return (
+    <>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">PAYMENT REMINDERS · {reminders.length} REMINDED · {respondedCount} RESPONDED · {reminders.length - respondedCount} WAITING</span><h1>November payment reminders</h1><p className="page-subtitle">Track who answered the November payment reminder.</p></div><button className="button button-primary" onClick={() => startEdit(null)} disabled={loadState !== 'ready'}><Plus size={16} />Add name</button></div>
+      {editing && <form className="surface reminder-form" onSubmit={save}>
+        <div className="form-grid">
+          <label className="field">Name<input name="name" value={form.name} onChange={update} list={listId} maxLength={200} placeholder="Client name" required autoFocus /><datalist id={listId}>{clients.map((client) => <option key={client.id || client.name} value={client.name} />)}</datalist></label>
+          <label className="field">Did they respond?<select name="responded" value={form.responded} onChange={update}><option>No</option><option>Yes</option></select><ChevronDown size={15} /></label>
+          {form.responded === 'Yes' && <>
+            <label className="field field-wide">What they responded<textarea name="response" value={form.response} onChange={update} rows={3} maxLength={2000} placeholder="Their reply" /></label>
+            <label className="field">Date and time responded (CT)<input type="datetime-local" name="respondedAt" value={form.respondedAt} onChange={update} /></label>
+          </>}
+        </div>
+        {formError && <div className="form-error" role="alert">{formError}</div>}
+        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setEditing(null)}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : editing === 'new' ? 'Add reminder' : 'Save changes'}</button></div>
+      </form>}
+      <section className="surface roster-surface">
+        <div className="roster-toolbar">
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or response" aria-label="Search payment reminders" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+          <FilterMenu label="Show" value={filter} onChange={setFilter} icon={SlidersHorizontal} options={[{ value: 'all', label: 'Everyone' }, { value: 'responded', label: 'Responded' }, { value: 'waiting', label: 'No response yet' }]} />
+        </div>
+        <div className="table-scroll"><table className="client-table reminder-table"><thead><tr><th>Name</th><th>Responded</th><th>Response</th><th>Date and time</th><th><span className="sr-only">Edit</span></th></tr></thead><tbody>
+          {visible.map((reminder) => <tr key={reminder.id} className="row-static"><td><strong>{reminder.name}</strong></td><td><span className={`status ${reminder.responded === 'Yes' ? 'status-positive' : 'status-caution'}`}><i />{reminder.responded === 'Yes' ? 'Yes' : 'No'}</span></td><td>{reminder.response || <span className="muted">—</span>}</td><td>{reminder.responded === 'Yes' ? formatResponseTime(reminder.respondedAt) : <span className="muted">—</span>}</td><td><button className="icon-button" onClick={() => startEdit(reminder)} aria-label={`Edit reminder for ${reminder.name}`} title="Edit"><Pencil size={14} /></button></td></tr>)}
+          {!visible.length && <tr><td colSpan="5"><div className="table-empty"><CreditCard size={22} /><strong>{empty[0]}</strong>{empty[1] && <span>{empty[1]}</span>}</div></td></tr>}
+        </tbody></table></div>
+        <div className="table-foot"><span>Showing {visible.length} of {reminders.length} reminders</span><span><i className="sync-dot" /> Saved to PaymentReminders</span></div>
+      </section>
+    </>
+  );
+}
+
+function WorkPermitList() {
+  const [records, setRecords] = useState([]);
+  const [status, setStatus] = useState('loading');
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [section, setSection] = useState('All');
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/work-permits')
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load work permit records.');
+        return result;
+      })
+      .then((result) => {
+        if (!active) return;
+        setRecords(result.workPermits || []);
+        setStatus(result.configured ? 'ready' : 'not-configured');
+      })
+      .catch((loadError) => {
+        if (!active) return;
+        setError(loadError.message);
+        setStatus('error');
+      });
+    return () => { active = false; };
+  }, []);
+
+  const query = search.trim().toLowerCase();
+  const visible = records.filter((record) => (section === 'All' || record.section === section)
+    && (!query || [record.id, record.name, record.note].some((value) => value.toLowerCase().includes(query))));
+  const pendingCount = records.filter((record) => record.section === 'Pending').length;
+  const emptyMessage = status === 'loading'
+    ? ['Loading work permits…', '']
+    : status === 'not-configured'
+      ? ['Work permit data is not connected', 'Add BBeckford_WorkPermit_Database.xlsx to the project folder, or set GOOGLE_WORK_PERMIT_SHEET_ID.']
+      : status === 'error'
+        ? ['Could not load work permits', error]
+        : ['No matching records', 'Try a different search or section.'];
+
+  return (
+    <>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">WORK PERMITS · {records.length} RECORDS · {pendingCount} PENDING</span><h1>Work permit tracker</h1><p className="page-subtitle">{visible.length} records shown</p></div></div>
+      <section className="surface roster-surface">
+        <div className="roster-toolbar">
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, note or ID" aria-label="Search work permits" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+          <FilterMenu label="Section" value={section} onChange={setSection} icon={SlidersHorizontal} options={[{ value: 'All', label: 'All sections' }, { value: 'Regular', label: 'Regular' }, { value: 'Pending', label: 'Pending' }]} />
+        </div>
+        <div className="table-scroll"><table className="client-table work-permit-table"><thead><tr><th>ID</th><th>Client</th><th>Note</th><th>Section</th></tr></thead><tbody>
+          {visible.map((record) => <tr key={record.id}><td>{record.id}</td><td><strong>{record.name}</strong></td><td>{record.note || <span className="muted">No note</span>}</td><td><span className={`status ${record.section === 'Pending' ? 'status-caution' : 'status-neutral'}`}><i />{record.section || 'Not set'}</span></td></tr>)}
+          {!visible.length && <tr><td colSpan="4"><div className="table-empty"><Briefcase size={22} /><strong>{emptyMessage[0]}</strong>{emptyMessage[1] && <span>{emptyMessage[1]}</span>}</div></td></tr>}
+        </tbody></table></div>
+        <div className="table-foot"><span>Showing {visible.length} of {records.length} records</span><span><i className="sync-dot" /> Read-only view</span></div>
+      </section>
+    </>
+  );
+}
+
+function ClientList({ clients, search, onSearch, onSelectClient, view = 'clients' }) {
   const [frequency, setFrequency] = useState('All frequencies');
   const [payment, setPayment] = useState('All payment statuses');
   const [sortOrder, setSortOrder] = useState('name');
+  const today = centralDateKey();
+  const caseType = view.startsWith('case:') ? view.slice('case:'.length) : '';
+  const titles = {
+    clients: 'Client roster',
+    payments: 'Payment list',
+    'follow-ups': 'Upcoming follow-ups',
+    'follow-ups-week': 'Follow-ups this week',
+  };
+  const title = caseType ? `${caseType} clients` : titles[view] || 'Client roster';
   const visibleClients = clients.filter((client) => {
     const query = search.trim().toLowerCase();
     const matchesQuery = !query || [client.id, client.name, client.email, client.phone].some((value) => value.toLowerCase().includes(query));
     const matchesFrequency = frequency === 'All frequencies' || client.frequency === frequency;
     const matchesPayment = payment === 'All payment statuses' || client.paymentStatus === payment;
-    return matchesQuery && matchesFrequency && matchesPayment;
+    const matchesCaseType = !caseType || isCaseTypeSelected(client.caseType, caseType);
+    const followUpDays = daysUntil(client.nextContactDate, today);
+    const matchesFollowUps = view !== 'follow-ups' && view !== 'follow-ups-week' || followUpDays !== null && followUpDays >= 0;
+    const matchesWeek = view !== 'follow-ups-week' || followUpDays <= 7;
+    const matchesPayments = view !== 'payments' || client.paymentStatus.toLowerCase() === 'pending';
+    return matchesQuery && matchesFrequency && matchesPayment && matchesCaseType && matchesFollowUps && matchesWeek && matchesPayments;
   }).sort((left, right) => {
+    if (view === 'follow-ups' || view === 'follow-ups-week') return left.nextContactDate.localeCompare(right.nextContactDate);
     if (sortOrder === 'clientId') {
       const leftNumber = Number(left.id.match(/\d+/)?.[0] || 0);
       const rightNumber = Number(right.id.match(/\d+/)?.[0] || 0);
@@ -495,7 +726,7 @@ function ClientList({ clients, search, onSearch, onSelectClient }) {
 
   return (
     <>
-      <div className="welcome-row roster-heading"><div><span className="eyebrow">MASTERDATA · {clients.length} RECORDS</span><h1>Client roster</h1><p className="page-subtitle">{visibleClients.length} clients shown</p></div></div>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">MASTERDATA · {clients.length} RECORDS</span><h1>{title}</h1><p className="page-subtitle">{visibleClients.length} clients shown</p></div></div>
       <section className="surface roster-surface">
         <div className="roster-toolbar">
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, email or ID" aria-label="Search clients" />{search && <button className="clear-search" onClick={() => onSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
@@ -574,6 +805,7 @@ export default function App() {
   const [page, setPage] = useState('dashboard');
   const [clients, setClients] = useState([]);
   const [courtDates, setCourtDates] = useState([]);
+  const [courtDatesError, setCourtDatesError] = useState('');
   const [search, setSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState(null);
   const [intakeOpen, setIntakeOpen] = useState(false);
@@ -613,11 +845,14 @@ export default function App() {
     const loadCourtDates = async () => {
       try {
         const response = await fetch('/api/court-dates');
-        if (!response.ok) return;
         const result = await response.json();
-        if (active) setCourtDates(result.courtDates || []);
-      } catch {
-        if (active) setCourtDates([]);
+        if (!response.ok) throw new Error(result.error || 'Could not load court dates.');
+        if (active) {
+          setCourtDates(result.courtDates || []);
+          setCourtDatesError('');
+        }
+      } catch (error) {
+        if (active) setCourtDatesError(error.message || 'Could not load court dates.');
       }
     };
     const load = async () => {
@@ -660,9 +895,12 @@ export default function App() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Could not refresh client data.');
       const courtResponse = await fetch('/api/court-dates');
+      const courtResult = await courtResponse.json().catch(() => ({}));
       if (courtResponse.ok) {
-        const courtResult = await courtResponse.json();
         setCourtDates(courtResult.courtDates || []);
+        setCourtDatesError('');
+      } else {
+        setCourtDatesError(courtResult.error || 'Could not load court dates.');
       }
       setClients(result.clients);
       setLastUpdated(result.modifiedAt);
@@ -717,6 +955,11 @@ export default function App() {
     setToast(`Submitted: ${result.client.name}`);
   }
 
+  function showMetricResults(view) {
+    setSearch('');
+    setPage(`results:${view}`);
+  }
+
   async function logout() {
     await fetch('/api/logout', { method: 'POST' });
     setAuthStatus('anonymous');
@@ -725,6 +968,10 @@ export default function App() {
   const updatedLabel = lastUpdated
     ? `Synced ${new Intl.DateTimeFormat('en-US', { timeZone: CENTRAL_TIME_ZONE, hour: 'numeric', minute: '2-digit' }).format(new Date(lastUpdated))} CT`
     : 'Waiting for data';
+  const resultView = page.startsWith('results:') ? page.slice('results:'.length) : '';
+  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit' })[page]
+    || (resultView === 'court-dates' ? 'Court dates' : resultView.startsWith('case:') ? `${resultView.slice('case:'.length)} clients` : ({ payments: 'Payment list', 'follow-ups': 'Upcoming follow-ups', 'follow-ups-week': 'Follow-ups this week', clients: 'Client roster' })[resultView])
+    || 'Overview';
   if (authStatus === 'checking') return <main className="login-screen"><div className="login-mark"><LockKeyhole size={19} /></div></main>;
   if (authStatus !== 'authenticated') return <LoginScreen onAuthenticated={() => setAuthStatus('authenticated')} />;
 
@@ -732,17 +979,25 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="#dashboard" onClick={(event) => { event.preventDefault(); setPage('dashboard'); }}><span className="brand-mark"><span /><span /><span /></span><span className="brand-name">BBeckford Law<span>ADMIN PORTAL</span></span></a>
-        <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><button className={`nav-item ${page === 'clients' ? 'active' : ''}`} onClick={() => setPage('clients')}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button></div>
+        <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><button className={`nav-item ${page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates') ? 'active' : ''}`} onClick={() => setPage('clients')}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button></div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
       <main className="main-area">
-        <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span>/</span><b>{({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date' })[page]}</b></div><div className="topbar-actions"><CentralClock /><span className="sync-state"><i className="sync-dot" />{updatedLabel}</span><button className={`icon-button refresh-button ${refreshing ? 'is-refreshing' : ''}`} onClick={refreshWorkbook} aria-label="Refresh client data" title="Refresh data"><RefreshCw size={17} /></button>{loginRequired && <button className="icon-button" onClick={logout} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>}{page !== 'payments' && page !== 'court-dates' && <button className="button button-primary top-add" onClick={() => setIntakeOpen(true)}><Plus size={16} />Add client</button>}</div></header>
+        <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span>/</span><b>{pageTitle}</b></div><div className="topbar-actions"><CentralClock /><span className="sync-state"><i className="sync-dot" />{updatedLabel}</span><button className={`icon-button refresh-button ${refreshing ? 'is-refreshing' : ''}`} onClick={refreshWorkbook} aria-label="Refresh client data" title="Refresh data"><RefreshCw size={17} /></button>{loginRequired && <button className="icon-button" onClick={logout} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>}{page !== 'payments' && page !== 'court-dates' && page !== 'work-permits' && <button className="button button-primary top-add" onClick={() => setIntakeOpen(true)}><Plus size={16} />Add client</button>}</div></header>
         <div className="page-content">
           {loadError && <div className="load-error" role="alert"><span>{loadError}</span><button onClick={refreshWorkbook}>Retry <RefreshCw size={14} /></button></div>}
           {page === 'dashboard'
-            ? <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />
+            ? <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />
             : page === 'clients'
               ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} />
+              : page === 'work-permits'
+                ? <WorkPermitList />
+              : page === 'payments'
+                ? <PaymentReminders clients={clients} />
+              : page === 'court-dates' || resultView === 'court-dates'
+                ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
+                : resultView
+                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} view={resultView} />
               : <ComingSoon title={page === 'payments' ? 'Payment' : 'Court Date'} icon={page === 'payments' ? CreditCard : CalendarDays} />}
           <footer className="page-footer"><span><i className="sync-dot" /> {dataSource} connection active</span><span>{dataSource === 'Google Sheets' ? 'Sheet checked every 20 seconds' : 'Workbook checked every 20 seconds'}</span></footer>
         </div>
