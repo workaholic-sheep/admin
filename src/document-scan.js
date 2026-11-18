@@ -119,21 +119,62 @@ function detectType(text) {
   return 'document';
 }
 
+const STATES = 'ALABAMA|ALASKA|ARIZONA|ARKANSAS|CALIFORNIA|COLORADO|CONNECTICUT|DELAWARE|FLORIDA|GEORGIA|HAWAII|IDAHO|ILLINOIS|INDIANA|IOWA|KANSAS|KENTUCKY|LOUISIANA|MAINE|MARYLAND|MASSACHUSETTS|MICHIGAN|MINNESOTA|MISSISSIPPI|MISSOURI|MONTANA|NEBRASKA|NEVADA|NEW|HAMPSHIRE|JERSEY|MEXICO|YORK|NORTH|CAROLINA|DAKOTA|OHIO|OKLAHOMA|OREGON|PENNSYLVANIA|RHODE|ISLAND|SOUTH|TENNESSEE|TEXAS|UTAH|VERMONT|VIRGINIA|WASHINGTON|WEST|WISCONSIN|WYOMING|COLUMBIA|DISTRICT';
+const CARD_WORDS = new RegExp(`^(?:${STATES}|USA|UNITED|STATES|AMERICA|OF|DRIVER|DRIVERS|DRIVER'S|LICENSE|LICENCE|CLASS|IDENTIFICATION|CARD|ID|REAL|DONOR|VETERAN|NONE|RESTRICTIONS|ENDORSEMENTS|SEX|HGT|WGT|EYES|HAIR|EXP|ISS|DOB|DD|DL|LN|FN|OPERATOR|COMMERCIAL|PERMIT|AUTHORIZATION|EMPLOYMENT|PASSPORT|BRO|BLK|BLU|BRN|GRN|HAZ)$`, 'i');
+
+// A line that looks like part of a printed name: 1–4 alphabetic words, none of them card boilerplate.
+function nameLine(line) {
+  const text = line.replace(/^(?:\d{1,2}[a-z]?|[lI])\s+/, '').trim();
+  const words = text.split(/\s+/);
+  if (!words.length || words.length > 4) return '';
+  if (!words.every((word) => /^[A-Za-z][A-Za-z'-]+$/.test(word) && !CARD_WORDS.test(word))) return '';
+  return text;
+}
+
 function readName(lines) {
   const isName = (value) => Boolean(cleanName(value)) && !/\d/.test(value);
-  const surname = labeled(lines, 'LN|LAST\\s*NAME|SURNAME|FAMILY\\s*NAME|APELLIDOS?', isName);
-  const given = labeled(lines, 'FN|FIRST\\s*NAME|GIVEN\\s*NAMES?|NOMBRES?', isName);
+  const stopAtLabel = (value) => value.split(/\s+(?:LN|FN|DOB|D0B|SEX|EXP|ISS|CLASS)\b/i)[0];
+  const surname = stopAtLabel(labeled(lines, 'LN|LAST\\s*NAME|SURNAME|FAMILY\\s*NAME|APELLIDOS?', isName));
+  const given = stopAtLabel(labeled(lines, 'FN|FIRST\\s*NAME|GIVEN\\s*NAMES?|NOMBRES?', isName));
   if (surname || given) return cleanName(`${given} ${surname}`);
 
   // US licenses number their fields: "1 FAMILYNAME" and "2 GIVEN NAMES".
-  const numbered = (number) => lines
-    .map((line) => line.match(new RegExp(`^${number}\\s+([A-Z][A-Z' -]+)$`)))
-    .find(Boolean)?.[1] || '';
-  const family = cleanName(numbered(1));
-  const first = cleanName(numbered(2));
+  // OCR often reads the "1" as l or I and the "2" as Z, and can run the number into the name.
+  const numbered = (pattern) => lines
+    .map((line) => line.match(new RegExp(`^(?:${pattern})[\\s.:]*([A-Z][A-Z'-]+(?: [A-Z][A-Z'-]+)*)`)))
+    .find((match) => match && !CARD_WORDS.test(match[1].split(' ')[0]))?.[1] || '';
+  const family = cleanName(numbered('1|l|I(?=\\s)'));
+  const first = cleanName(numbered('2|Z(?=\\s)'));
   if (family && first) return `${first} ${family}`;
 
-  return cleanName(labeled(lines, '(?<!LAST |FIRST |FAMILY |GIVEN )NAME', isName));
+  const labeledName = cleanName(labeled(lines, '(?<!LAST |FIRST |FAMILY |GIVEN )NAME', isName));
+  if (labeledName) return labeledName;
+
+  // Licenses print the name directly above the street address: family name, then given names.
+  const street = lines.findIndex((line) => STREET_PATTERN.test(line.replace(/^8\s+(?=\d)/, '')));
+  if (street > 0) {
+    const above = [];
+    for (let index = street - 1; index >= 0 && above.length < 2; index -= 1) {
+      const text = nameLine(lines[index]);
+      if (!text) break;
+      above.unshift(text);
+    }
+    if (above.length === 2) return cleanName(`${above[1]} ${above[0]}`);
+    if (above.length === 1) return cleanName(above[0]);
+  }
+  return '';
+}
+
+// Without a readable DOB label, the birth date is the oldest date on the card that is at least 14 years back;
+// the other dates are issue and expiry dates.
+function oldestBirthDate(text) {
+  const cutoff = new Date();
+  cutoff.setFullYear(cutoff.getFullYear() - 14);
+  const limit = cutoff.toISOString().slice(0, 10);
+  return [...text.matchAll(new RegExp(DATE_PATTERN.source, 'gi'))]
+    .map((match) => toIsoDate(match[1]))
+    .filter((date) => date && date <= limit && date >= '1900-01-01')
+    .sort()[0] || '';
 }
 
 function readAddress(lines) {
@@ -144,7 +185,11 @@ function readAddress(lines) {
     const next = lines[index + 1] || '';
     return CITY_PATTERN.test(next) ? `${line}, ${next}` : line;
   }
-  return labeledAddress;
+  if (labeledAddress) return labeledAddress;
+  const city = lines.findIndex((line) => CITY_PATTERN.test(line));
+  if (city < 0) return '';
+  const previous = (lines[city - 1] || '').replace(/^8\s+(?=\d)/, '');
+  return /^\d+\s+\S/.test(previous) ? `${previous}, ${lines[city]}` : lines[city];
 }
 
 export function parseDocumentText(text) {
@@ -155,8 +200,8 @@ export function parseDocumentText(text) {
 
   const email = joined.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
   const phone = joined.match(/(?:\+?1[\s.-]?)?\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/)?.[0] || '';
-  const printedBirthDate = labeled(lines, 'DOB|DATE\\s*OF\\s*BIRTH|BIRTH\\s*DATE|FECHA\\s*DE\\s*NACIMIENTO', (value) => DATE_PATTERN.test(value)).match(DATE_PATTERN)?.[1] || '';
-  const dateOfBirth = mrz?.dateOfBirth || toIsoDate(printedBirthDate);
+  const printedBirthDate = labeled(lines, 'D[O0]B|DATE\\s*OF\\s*BIRTH|BIRTH\\s*DATE|FECHA\\s*DE\\s*NACIMIENTO', (value) => DATE_PATTERN.test(value)).match(DATE_PATTERN)?.[1] || '';
+  const dateOfBirth = mrz?.dateOfBirth || toIsoDate(printedBirthDate) || oldestBirthDate(joined);
   const aNumberMatch = joined.match(/\b(?:USCIS\s*#?\s*:?\s*|A[-#]?\s?)(\d{3}[-\s]?\d{3}[-\s]?\d{3}|\d{8})\b/i);
   const aNumber = aNumberMatch ? `A${aNumberMatch[1].replace(/\D/g, '').padStart(9, '0')}` : '';
   const idNumber = mrz?.idNumber
@@ -199,7 +244,7 @@ async function prepareImage(file) {
     throw new Error('This image could not be opened. Use a JPG, PNG, or WebP photo.');
   }
   const longest = Math.max(bitmap.width, bitmap.height);
-  const scale = Math.min(2.5, Math.max(1, 2000 / longest));
+  const scale = Math.min(4, Math.max(1, 2400 / longest));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(bitmap.width * scale);
   canvas.height = Math.round(bitmap.height * scale);
@@ -210,20 +255,39 @@ async function prepareImage(file) {
   return canvas;
 }
 
+// Combines two readings of the same document, keeping the first value found for each field.
+export function mergeScans(first, second) {
+  const fields = { ...first.fields };
+  for (const [key, value] of Object.entries(second.fields)) if (!fields[key] && value) fields[key] = value;
+  const labels = new Set(first.details.map((detail) => detail.label));
+  return {
+    docType: first.docType === 'document' ? second.docType : first.docType,
+    fields,
+    details: [...first.details, ...second.details.filter((detail) => !labels.has(detail.label))],
+    text: `${first.text}\n\n--- second pass ---\n${second.text}`,
+  };
+}
+
 export async function scanDocument(file, onProgress = () => {}) {
   if (!file.type.startsWith('image/')) throw new Error('Upload a photo or scan of the document (JPG, PNG, or WebP). PDFs are not supported yet.');
   onProgress(0, 'Preparing image');
   const image = await prepareImage(file);
   const { createWorker } = await import('tesseract.js');
   onProgress(0.05, 'Loading reader');
+  let pass = 0;
   const worker = await createWorker('eng', 1, {
     logger: (message) => {
-      if (message.status === 'recognizing text') onProgress(0.1 + message.progress * 0.9, 'Reading text');
+      if (message.status === 'recognizing text') onProgress(0.1 + (pass + message.progress) * 0.45, pass ? 'Reading again' : 'Reading text');
     },
   });
   try {
-    const { data } = await worker.recognize(image);
-    return parseDocumentText(data.text);
+    const first = parseDocumentText((await worker.recognize(image)).data.text);
+    if (first.fields.name && first.fields.dateOfBirth) return first;
+    // Sparse-text mode finds scattered fields on ID cards that the default page layout misses.
+    pass = 1;
+    await worker.setParameters({ tessedit_pageseg_mode: '11' });
+    const second = parseDocumentText((await worker.recognize(image)).data.text);
+    return mergeScans(first, second);
   } finally {
     await worker.terminate();
   }

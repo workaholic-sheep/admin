@@ -520,3 +520,6 @@ body { font-size: var(--type-body); }
   .document-scan .button { width: 100%; }
 }
 .detail-grid > .detail-wide { grid-column: 1 / -1; }
+.document-scan { flex-wrap: wrap; }
+.document-scan-text summary { color: #6f7d74; font-size: var(--type-small, 11px); cursor: pointer; }
+.document-scan-text pre { max-height: 180px; overflow: auto; margin: 6px 0 0; padding: 8px; border: 1px solid #e4e9e4; border-radius: 4px; background: #fff; color: #44564b; font-size: 11px; line-height: 1.4; white-space: pre-wrap; }

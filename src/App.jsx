@@ -265,6 +265,7 @@ function DocumentScanner({ onScanned }) {
   const [preview, setPreview] = useState('');
   const [message, setMessage] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [rawText, setRawText] = useState('');
 
   useEffect(() => () => preview && URL.revokeObjectURL(preview), [preview]);
 
@@ -273,9 +274,11 @@ function DocumentScanner({ onScanned }) {
     setPreview(file.type.startsWith('image/') ? URL.createObjectURL(file) : '');
     setState('scanning');
     setMessage('');
+    setRawText('');
     setProgress({ value: 0, label: 'Preparing image' });
     try {
       const result = await scanDocument(file, (value, label) => setProgress({ value, label }));
+      setRawText(result.text || '');
       const summary = onScanned(result);
       setState(summary.found ? 'done' : 'empty');
       setMessage(summary.found ? summary.text : 'No details could be read. Try a sharper, well-lit photo taken straight on.');
@@ -311,6 +314,7 @@ function DocumentScanner({ onScanned }) {
         {scanning
           ? <span className="clock-bar"><i style={{ width: `${percent}%` }} /></span>
           : <span>{message || "Upload or drop a photo of a driver's license, passport, or EAD card. It is read on this computer and never uploaded."}</span>}
+        {!scanning && rawText && <details className="document-scan-text"><summary>Show text read</summary><pre>{rawText}</pre></details>}
       </div>
       <input ref={inputRef} type="file" accept="image/*" hidden onChange={choose} />
       <button type="button" className="button button-secondary" onClick={() => inputRef.current?.click()} disabled={scanning}>
