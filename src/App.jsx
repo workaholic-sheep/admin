@@ -85,6 +85,27 @@ function normalizeClientName(value) {
     .replace(/[^a-z0-9]/g, '');
 }
 
+function ageFromBirthDate(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '';
+  const [year, month, day] = match.slice(1).map(Number);
+  const [todayYear, todayMonth, todayDay] = centralDateKey().split('-').map(Number);
+  const age = todayYear - year - (todayMonth < month || (todayMonth === month && todayDay < day) ? 1 : 0);
+  return age >= 0 && age < 130 ? String(age) : '';
+}
+
+const genders = ['Male', 'Female', 'Other'];
+
+function PersonalFields({ form, onChange, scanned = () => undefined }) {
+  const age = ageFromBirthDate(form.dateOfBirth);
+  const genderOptions = [...new Set([...genders, form.gender].filter(Boolean))];
+  return <>
+    <label className="field">Date of birth<input className={scanned('dateOfBirth')} type="date" name="dateOfBirth" value={form.dateOfBirth} onChange={onChange} max={centralDateKey()} />{age && <span className="field-hint">Age {age}</span>}</label>
+    <label className="field">Gender<select className={scanned('gender')} name="gender" value={form.gender} onChange={onChange}><option value="">Not set</option>{genderOptions.map((gender) => <option key={gender}>{gender}</option>)}</select><ChevronDown size={15} /></label>
+    <label className="field field-wide">Address<input className={scanned('address')} name="address" value={form.address} onChange={onChange} maxLength={300} placeholder="Street, city, state, ZIP" /></label>
+  </>;
+}
+
 function greeting(now) {
   const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: CENTRAL_TIME_ZONE, hour: 'numeric', hourCycle: 'h23' }).format(now));
   return hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
@@ -302,10 +323,11 @@ function DocumentScanner({ onScanned }) {
 function applyScan(current, result) {
   const next = { ...current };
   const filled = [];
-  for (const key of ['name', 'email', 'phone']) {
+  const labels = { name: 'name', email: 'email', phone: 'phone', dateOfBirth: 'date of birth', gender: 'gender', address: 'address' };
+  for (const [key, label] of Object.entries(labels)) {
     if (result.fields[key]) {
       next[key] = result.fields[key];
-      filled.push(key);
+      filled.push({ key, label });
     }
   }
   if (result.details.length) {
@@ -333,6 +355,9 @@ function ClientForm({ onClose, onCreated }) {
     lastAttorneyDate: '',
     paymentStatus: 'Pending',
     notes: '',
+    dateOfBirth: '',
+    gender: '',
+    address: '',
   });
 
   const [scannedFields, setScannedFields] = useState(() => new Set());
@@ -351,11 +376,11 @@ function ClientForm({ onClose, onCreated }) {
   function fillFromScan(result) {
     const { next, filled } = applyScan(form, result);
     setForm(next);
-    const fields = new Set(filled);
+    const fields = new Set(filled.map((field) => field.key));
     if (result.details.length) fields.add('notes');
     setScannedFields(fields);
     const parts = [];
-    if (filled.length) parts.push(`filled ${filled.join(', ')}`);
+    if (filled.length) parts.push(`filled ${filled.map((field) => field.label).join(', ')}`);
     if (result.details.length) parts.push(`added ${result.details.map((detail) => detail.label.toLowerCase()).join(', ')} to notes`);
     return { found: parts.length > 0, text: `Read a ${result.docType}: ${parts.join('; ')}. Check each highlighted value before saving.` };
   }
@@ -396,6 +421,7 @@ function ClientForm({ onClose, onCreated }) {
             <label className="field field-wide">Client name <b>*</b><input autoFocus className={scanned('name')} name="name" value={form.name} onChange={update} required maxLength={120} placeholder="Full name" /></label>
             <label className="field">Email<input className={scanned('email')} name="email" type="email" value={form.email} onChange={update} maxLength={180} placeholder="name@example.com" /></label>
             <label className="field">Phone<input className={scanned('phone')} name="phone" value={form.phone} onChange={update} maxLength={40} placeholder="Phone number" /></label>
+            <PersonalFields form={form} onChange={update} scanned={scanned} />
             <CaseTypePicker value={form.caseType} onChange={(caseType) => setForm((current) => ({ ...current, caseType }))} />
             <label className="field">Meeting frequency<select name="frequency" value={form.frequency} onChange={update}>{frequencies.map((frequency) => <option key={frequency}>{frequency}</option>)}</select><ChevronDown size={15} /></label>
             <label className="field">Translator needed<select name="translator" value={form.translator} onChange={update}><option>No</option><option>Yes</option></select><ChevronDown size={15} /></label>
@@ -436,6 +462,9 @@ function editValues(client) {
     lastAttorneyDate: client.lastAttorneyDate || '',
     paymentStatus: client.paymentStatus || 'Pending',
     notes: client.notes || '',
+    dateOfBirth: client.dateOfBirth || '',
+    gender: client.gender || '',
+    address: client.address || '',
   };
 }
 
@@ -492,6 +521,7 @@ function ClientDetails({ client, courtDates, onClose, onUpdate }) {
             <label className="field field-wide">Client name<input name="name" value={form.name} onChange={update} required maxLength={120} /></label>
             <label className="field">Email<input name="email" type="email" value={form.email} onChange={update} maxLength={180} /></label>
             <label className="field">Phone<input name="phone" value={form.phone} onChange={update} maxLength={40} /></label>
+            <PersonalFields form={form} onChange={update} />
             <CaseTypePicker value={form.caseType} onChange={(caseType) => setForm((current) => ({ ...current, caseType }))} />
             <label className="field">Meeting frequency<select name="frequency" value={form.frequency} onChange={update}>{frequencyOptions.map((frequency) => <option key={frequency}>{frequency}</option>)}</select><ChevronDown size={15} /></label>
             <label className="field">Translator needed<select name="translator" value={form.translator} onChange={update}><option>No</option><option>Yes</option></select><ChevronDown size={15} /></label>
@@ -511,6 +541,10 @@ function ClientDetails({ client, courtDates, onClose, onUpdate }) {
             <div><dt>Client ID</dt><dd>{client.id || '—'}</dd></div>
             <div><dt>Email</dt><dd>{client.email || '—'}</dd></div>
             <div><dt>Phone</dt><dd>{client.phone || '—'}</dd></div>
+            <div><dt>Date of birth</dt><dd>{formatDate(client.dateOfBirth)}</dd></div>
+            <div><dt>Age</dt><dd>{ageFromBirthDate(client.dateOfBirth) || client.age || '—'}</dd></div>
+            <div><dt>Gender</dt><dd>{client.gender || '—'}</dd></div>
+            <div className="detail-wide"><dt>Address</dt><dd>{client.address || '—'}</dd></div>
             <div><dt>Translator needed</dt><dd>{client.translator || '—'}</dd></div>
             <div><dt>Date onboarded</dt><dd>{formatDate(client.onboardingDate)}</dd></div>
             <div><dt>Date of interview</dt><dd>{formatDate(client.interviewDate)}</dd></div>

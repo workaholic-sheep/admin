@@ -48,11 +48,44 @@ function labeled(lines, labelPattern, accept = (value) => Boolean(value)) {
   return '';
 }
 
-function mrzDate(yymmdd, past = true) {
-  const yy = Number(yymmdd.slice(0, 2));
-  const currentYY = new Date().getFullYear() % 100;
-  const century = past ? (yy > currentYY ? 1900 : 2000) : 2000;
-  return `${yymmdd.slice(2, 4)}/${yymmdd.slice(4, 6)}/${century + yy}`;
+function fullYear(year) {
+  if (year >= 100) return year;
+  return year > new Date().getFullYear() % 100 ? 1900 + year : 2000 + year;
+}
+
+function isoDate(year, month, day) {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day || date > new Date()) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+// Turns a printed birth date into YYYY-MM-DD. Numeric dates are read US-style (month first)
+// unless the first number cannot be a month.
+export function toIsoDate(text) {
+  const value = String(text || '').toUpperCase();
+  let match = value.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (match) return isoDate(Number(match[1]), Number(match[2]), Number(match[3]));
+  match = value.match(/\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\b/);
+  if (match) {
+    const [first, second, year] = match.slice(1).map(Number);
+    const [month, day] = first > 12 ? [second, first] : [first, second];
+    return isoDate(fullYear(year), month, day);
+  }
+  match = value.match(new RegExp(`\\b(\\d{1,2})\\s*(${MONTHS})[A-Z]*\\s*(\\d{2,4})\\b`));
+  if (match) return isoDate(fullYear(Number(match[3])), MONTHS.split('|').indexOf(match[2]) + 1, Number(match[1]));
+  return '';
+}
+
+function mrzDate(yymmdd) {
+  return isoDate(fullYear(Number(yymmdd.slice(0, 2))), Number(yymmdd.slice(2, 4)), Number(yymmdd.slice(4, 6)));
+}
+
+const GENDERS = { M: 'Male', MALE: 'Male', MASCULINO: 'Male', H: 'Male', F: 'Female', FEMALE: 'Female', FEMENINO: 'Female', X: 'Other' };
+
+function readGender(lines) {
+  const value = labeled(lines, 'SEX|SEXO|GENDER', (text) => /^(MALE|FEMALE|MASCULINO|FEMENINO|[MFX])\b/i.test(text));
+  const word = value.match(/^(MALE|FEMALE|MASCULINO|FEMENINO|[MFX])\b/i)?.[1]?.toUpperCase();
+  return GENDERS[word] || '';
 }
 
 function readMrz(lines) {
@@ -71,6 +104,7 @@ function readMrz(lines) {
     result.idNumber = dataLine.slice(0, 9).replace(/</g, '');
     result.nationality = dataLine.slice(10, 13).replace(/</g, '');
     result.dateOfBirth = mrzDate(dataLine.slice(13, 19));
+    result.gender = GENDERS[dataLine[20]] || '';
   }
   return result;
 }
@@ -121,9 +155,8 @@ export function parseDocumentText(text) {
 
   const email = joined.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || '';
   const phone = joined.match(/(?:\+?1[\s.-]?)?\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/)?.[0] || '';
-  const dateOfBirth = mrz?.dateOfBirth
-    || labeled(lines, 'DOB|DATE\\s*OF\\s*BIRTH|BIRTH\\s*DATE|FECHA\\s*DE\\s*NACIMIENTO', (value) => DATE_PATTERN.test(value)).match(DATE_PATTERN)?.[1]
-    || '';
+  const printedBirthDate = labeled(lines, 'DOB|DATE\\s*OF\\s*BIRTH|BIRTH\\s*DATE|FECHA\\s*DE\\s*NACIMIENTO', (value) => DATE_PATTERN.test(value)).match(DATE_PATTERN)?.[1] || '';
+  const dateOfBirth = mrz?.dateOfBirth || toIsoDate(printedBirthDate);
   const aNumberMatch = joined.match(/\b(?:USCIS\s*#?\s*:?\s*|A[-#]?\s?)(\d{3}[-\s]?\d{3}[-\s]?\d{3}|\d{8})\b/i);
   const aNumber = aNumberMatch ? `A${aNumberMatch[1].replace(/\D/g, '').padStart(9, '0')}` : '';
   const idNumber = mrz?.idNumber
@@ -134,8 +167,8 @@ export function parseDocumentText(text) {
 
   const idLabel = docType === 'passport' ? 'Passport #' : docType === "driver's license" ? "Driver's license #" : 'ID #';
   const details = [
-    ['Date of birth', dateOfBirth],
-    ['Address', readAddress(lines)],
+    // A birth date that was found but could not be turned into a calendar date stays visible in notes.
+    ['Date of birth', dateOfBirth ? '' : printedBirthDate],
     ['A-Number', aNumber],
     [idLabel, idNumber],
     ['Nationality', nationality],
@@ -148,6 +181,9 @@ export function parseDocumentText(text) {
       name: name ? titleCase(name) : '',
       email,
       phone,
+      dateOfBirth,
+      gender: mrz?.gender || readGender(lines),
+      address: readAddress(lines),
     },
     details,
     text: joined,

@@ -320,12 +320,24 @@ app.put('/api/payment-reminders/:reminderId', async (request, response, next) =>
   }
 });
 
+// Date of birth, gender, and address are optional; reject malformed values before they reach the sheet.
+function personalDetailsError(input) {
+  const dateOfBirth = String(input.dateOfBirth || '').trim();
+  if (dateOfBirth && !/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth)) return 'Enter the date of birth in the expected calendar format.';
+  if (dateOfBirth && dateOfBirth > new Date().toISOString().slice(0, 10)) return 'Date of birth cannot be in the future.';
+  if (String(input.gender || '').trim().length > 30) return 'Gender must be 30 characters or fewer.';
+  if (String(input.address || '').trim().length > 300) return 'Address must be 300 characters or fewer.';
+  return '';
+}
+
 app.post('/api/clients', async (request, response, next) => {
   try {
     const input = request.body || {};
     const name = String(input.name || '').trim();
     const email = String(input.email || '').trim();
     if (!name) return response.status(400).json({ error: 'Client name is required.' });
+    const personalError = personalDetailsError(input);
+    if (personalError) return response.status(400).json({ error: personalError });
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return response.status(400).json({ error: 'Enter a valid email address.' });
     }
@@ -345,6 +357,9 @@ app.post('/api/clients', async (request, response, next) => {
       lastAttorneyDate: String(input.lastAttorneyDate || '').trim(),
       paymentStatus: String(input.paymentStatus || 'Pending').trim(),
       notes: String(input.notes || '').trim(),
+      dateOfBirth: String(input.dateOfBirth || '').trim(),
+      gender: String(input.gender || '').trim(),
+      address: String(input.address || '').trim(),
     });
     const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workbookPath)).mtime.toISOString();
     response.status(201).json({ client, modifiedAt, source: sourceName });
@@ -361,6 +376,8 @@ app.put('/api/clients/:clientId', async (request, response, next) => {
     const name = String(input.name || '').trim();
     const email = String(input.email || '').trim();
     if (!name) return response.status(400).json({ error: 'Client name is required.' });
+    const personalError = personalDetailsError(input);
+    if (personalError) return response.status(400).json({ error: personalError });
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return response.status(400).json({ error: 'Enter a valid email address.' });
     }
@@ -395,6 +412,9 @@ app.put('/api/clients/:clientId', async (request, response, next) => {
       lastAttorneyDate: String(input.lastAttorneyDate || '').trim(),
       paymentStatus: String(input.paymentStatus || '').trim(),
       notes,
+      dateOfBirth: String(input.dateOfBirth || '').trim(),
+      gender: String(input.gender || '').trim(),
+      address: String(input.address || '').trim(),
     });
     const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workbookPath)).mtime.toISOString();
     response.json({ client, modifiedAt, source: sourceName });

@@ -1,10 +1,13 @@
 import { google } from 'googleapis';
-import { mapMasterData } from './workbook.js';
+import { ADDRESS_HEADERS, DOB_HEADERS, GENDER_HEADERS, ageFrom, mapMasterData } from './workbook.js';
 import { REMINDER_HEADERS, REMINDER_SHEET, canonicalReminderHeader, mapReminder, nextReminderId, reminderCells } from './payment-reminders.js';
 import { WORK_PERMIT_HEADERS, WorkPermitError, mapWorkPermit, newWorkPermit, workPermitCells } from './work-permits.js';
 
 const SHEET_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const normalize = (value) => String(value ?? '').trim().toLowerCase();
+
+// Wide enough for columns added after the original A–P layout (Date of Birth, Gender, Address, …).
+const CLIENT_COLUMNS = 'A:AZ';
 
 function quoteSheetName(name) {
   return `'${name.replaceAll("'", "''")}'`;
@@ -67,7 +70,19 @@ function mappedClient(headers, values) {
   }
   client.daysRemaining = String(client.daysRemaining ?? '');
   client.caseType = String(client.caseType ?? '');
+  for (const field of ['age', 'gender', 'address']) client[field] = String(client[field] ?? '');
   return client;
+}
+
+function firstIndex(indexes, labels) {
+  return labels.map((label) => indexes.get(normalize(label))).find((index) => index !== undefined);
+}
+
+function ageFormula(indexes, rowNumber) {
+  const dobIndex = firstIndex(indexes, DOB_HEADERS);
+  if (dobIndex === undefined) return '';
+  const cell = `${columnLetters(dobIndex + 1)}${rowNumber}`;
+  return `=IF(${cell}="","",DATEDIF(${cell},TODAY(),"Y"))`;
 }
 
 function googleDate(value) {
@@ -152,7 +167,7 @@ export function createGoogleSheetStore({
     const readSheet = async (targetSheet) => {
       const response = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: `${quoteSheetName(targetSheet)}!A:P`,
+        range: `${quoteSheetName(targetSheet)}!${CLIENT_COLUMNS}`,
         valueRenderOption: 'UNFORMATTED_VALUE',
         dateTimeRenderOption: 'SERIAL_NUMBER',
       });
@@ -164,7 +179,7 @@ export function createGoogleSheetStore({
     if (activeSheetName) {
       const data = await readSheet(activeSheetName);
       if (!data) throw new Error(`The ${activeSheetName} tab is empty or unavailable.`);
-      return { sheets, sheetName: activeSheetName, quotedSheet: quoteSheetName(activeSheetName), range: `${quoteSheetName(activeSheetName)}!A:P`, ...data };
+      return { sheets, sheetName: activeSheetName, quotedSheet: quoteSheetName(activeSheetName), range: `${quoteSheetName(activeSheetName)}!${CLIENT_COLUMNS}`, ...data };
     }
 
     const hasCaseType = (data) => Boolean(data?.headers.some((header) => ['caetype', 'casetype', 'case type'].includes(normalize(header))));
@@ -195,7 +210,7 @@ export function createGoogleSheetStore({
     }
     if (!activeSheetName) throw configuredError || new Error(`The ${sheetName} tab is empty or unavailable.`);
     if (!data) throw new Error(`The ${activeSheetName} tab is empty or unavailable.`);
-    return { sheets, sheetName: activeSheetName, quotedSheet: quoteSheetName(activeSheetName), range: `${quoteSheetName(activeSheetName)}!A:P`, ...data };
+    return { sheets, sheetName: activeSheetName, quotedSheet: quoteSheetName(activeSheetName), range: `${quoteSheetName(activeSheetName)}!${CLIENT_COLUMNS}`, ...data };
   }
 
   async function list() {
@@ -295,7 +310,14 @@ export function createGoogleSheetStore({
     putFormula('Last Date With Attorney', dateFormula(input.lastAttorneyDate));
     put('Payment Status', input.paymentStatus || 'Pending');
     putFormula('Todays Date', '=TODAY()');
-    putFormula('Days Remaining', `=IF(K${rowNumber}="","",K${rowNumber}-N${rowNumber})`);
+    const nextContactLetter = columnLetters((indexes.get(normalize('Next date of Contact')) ?? 10) + 1);
+    const todayLetter = columnLetters((indexes.get(normalize('Todays Date')) ?? 13) + 1);
+    putFormula('Days Remaining', `=IF(${nextContactLetter}${rowNumber}="","",${nextContactLetter}${rowNumber}-${todayLetter}${rowNumber})`);
+    const dateOfBirth = dateFormula(input.dateOfBirth);
+    for (const header of DOB_HEADERS) putFormula(header, dateOfBirth);
+    for (const header of GENDER_HEADERS) put(header, String(input.gender ?? '').trim());
+    for (const header of ADDRESS_HEADERS) put(header, String(input.address ?? '').trim());
+    if (dateOfBirth) putFormula('Age', ageFormula(indexes, rowNumber));
     put('NOTES', input.notes || '');
 
     await sheets.spreadsheets.values.append({
@@ -322,6 +344,10 @@ export function createGoogleSheetStore({
       lastAttorneyDate: input.lastAttorneyDate || '',
       paymentStatus: input.paymentStatus || 'Pending',
       notes: input.notes || '',
+      dateOfBirth: input.dateOfBirth || '',
+      age: ageFrom(input.dateOfBirth),
+      gender: String(input.gender ?? '').trim(),
+      address: String(input.address ?? '').trim(),
       daysRemaining: input.nextContactDate
         ? Math.round((new Date(`${input.nextContactDate}T00:00:00Z`) - new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`)) / 86400000)
         : '',
@@ -393,6 +419,10 @@ export function createGoogleSheetStore({
     putDate('Last Date With Attorney', input.lastAttorneyDate);
     put('Payment Status', input.paymentStatus);
     put('NOTES', input.notes);
+    for (const header of DOB_HEADERS) putDate(header, input.dateOfBirth);
+    for (const header of GENDER_HEADERS) put(header, input.gender);
+    for (const header of ADDRESS_HEADERS) put(header, input.address);
+    if (parseDateFormula(input.dateOfBirth)) put('Age', ageFormula(indexes, rowIndex + 2), true);
 
     await sheets.spreadsheets.values.batchUpdate({
       spreadsheetId,
@@ -414,6 +444,8 @@ export function createGoogleSheetStore({
       lastContactDate: String(input.lastContactDate ?? ''),
       nextContactDate: normalize(nextContact) === 'done' ? 'done' : nextContact,
       lastAttorneyDate: String(input.lastAttorneyDate ?? ''),
+      dateOfBirth: String(input.dateOfBirth ?? ''),
+      age: ageFrom(input.dateOfBirth) || (parseDateFormula(input.dateOfBirth) ? '' : updatedClient.age),
     };
   }
 

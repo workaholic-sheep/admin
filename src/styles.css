@@ -513,9 +513,10 @@ body { font-size: var(--type-body); }
 .document-scan-body > span:not(.clock-bar) { color: #6f7d74; font-size: var(--type-small, 11px); line-height: 1.45; }
 .document-scan.is-error .document-scan-body > span, .document-scan.is-empty .document-scan-body > span { color: #a5442f; }
 .document-scan .button { flex: none; }
-.field input.is-scanned, .field textarea.is-scanned { border-color: #9dbca3; background: #f1f7f1; }
+.field input.is-scanned, .field select.is-scanned, .field textarea.is-scanned { border-color: #9dbca3; background: #f1f7f1; }
 .spin { animation: rotate 1s linear infinite; }
 @media (max-width: 560px) {
   .document-scan { flex-wrap: wrap; }
   .document-scan .button { width: 100%; }
 }
+.detail-grid > .detail-wide { grid-column: 1 / -1; }

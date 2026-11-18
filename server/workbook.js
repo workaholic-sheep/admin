@@ -54,7 +54,29 @@ function normalizeDate(value) {
   return normalized;
 }
 
+export const DOB_HEADERS = ['Date of Birth', 'DOB', 'Birth Date', 'Birthdate'];
+export const GENDER_HEADERS = ['Gender', 'Sex'];
+export const ADDRESS_HEADERS = ['Address', 'Home Address', 'Mailing Address'];
+
+// Reads the first non-empty value among header spellings, ignoring case and stray spaces.
+function pickField(row, labels) {
+  const wanted = new Set(labels.map(normalize));
+  const match = Object.entries(row).find(([header, value]) => wanted.has(normalize(header)) && String(value ?? '').trim() !== '');
+  return match ? match[1] : '';
+}
+
+// Whole years between an ISO birth date and today; blank when the date is missing or invalid.
+export function ageFrom(isoDate, today = new Date()) {
+  const match = String(isoDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '';
+  const [year, month, day] = match.slice(1).map(Number);
+  let age = today.getFullYear() - year;
+  if (today.getMonth() + 1 < month || (today.getMonth() + 1 === month && today.getDate() < day)) age -= 1;
+  return age >= 0 && age < 130 ? String(age) : '';
+}
+
 export function mapMasterData(row) {
+  const dateOfBirth = normalizeDate(pickField(row, DOB_HEADERS));
   return {
     id: row['ID No.'] || row.ClientID || row['Client ID'] || '',
     name: row['Client Name'] || row.ClientName || row.Name || '',
@@ -73,7 +95,25 @@ export function mapMasterData(row) {
     daysRemaining: row['Days Remaining '] || row['Days Remaining'] || '',
     notes: row.NOTES || row.Notes || '',
     caseType: row.CaseType || row.CaeType || row['Case Type'] || '',
+    dateOfBirth,
+    age: ageFrom(dateOfBirth) || String(pickField(row, ['Age']) ?? '').trim(),
+    gender: String(pickField(row, GENDER_HEADERS) ?? '').trim(),
+    address: String(pickField(row, ADDRESS_HEADERS) ?? '').trim(),
   };
+}
+
+function personalValues(sheet, input, rowNumber) {
+  const dateOfBirth = dateFromInput(input.dateOfBirth);
+  const values = {};
+  for (const header of DOB_HEADERS) values[header] = dateOfBirth || '';
+  for (const header of GENDER_HEADERS) values[header] = String(input.gender ?? '').trim();
+  for (const header of ADDRESS_HEADERS) values[header] = String(input.address ?? '').trim();
+  const dobColumn = DOB_HEADERS.map((header) => findColumn(sheet, header)).find(Boolean);
+  if (dateOfBirth && dobColumn) {
+    const cell = `${columnName(dobColumn)}${rowNumber}`;
+    values.Age = { formula: `IF(${cell}="","",DATEDIF(${cell},TODAY(),"Y"))`, result: Number(ageFrom(input.dateOfBirth)) };
+  }
+  return values;
 }
 
 async function loadWorkbook(filePath) {
@@ -414,7 +454,10 @@ async function addClientToWorkbook(filePath, input) {
   const rowNumber = master.actualRowCount + 1;
   const nextContact = dateFromInput(input.nextContactDate);
   const daysUntilNextContact = nextContact ? Math.round((nextContact - createdOn) / 86400000) : '';
+  const nextContactLetter = columnName(findColumn(master, 'Next date of Contact') || 11);
+  const todayLetter = columnName(findColumn(master, 'Todays Date') || 14);
   const masterRow = appendByHeaders(master, {
+    ...personalValues(master, input, rowNumber),
     'ID No.': clientId,
     ClientID: clientId,
     'Client Name': String(input.name ?? '').trim(),
@@ -434,7 +477,7 @@ async function addClientToWorkbook(filePath, input) {
     'Payment Status': input.paymentStatus,
     NOTES: input.notes,
     'Todays Date': { formula: 'TODAY()', result: excelSerial(createdOn) },
-    'Days Remaining ': { formula: `K${rowNumber}-N${rowNumber}`, result: daysUntilNextContact },
+    'Days Remaining ': { formula: `${nextContactLetter}${rowNumber}-${todayLetter}${rowNumber}`, result: daysUntilNextContact },
   });
   const archive = unzipSync(new Uint8Array(await readFile(filePath)));
   const paths = worksheetPaths(archive);
@@ -470,6 +513,10 @@ async function addClientToWorkbook(filePath, input) {
     lastAttorneyDate: input.lastAttorneyDate || '',
     paymentStatus: input.paymentStatus || '',
     notes: input.notes || '',
+    dateOfBirth: input.dateOfBirth || '',
+    age: ageFrom(input.dateOfBirth),
+    gender: String(input.gender ?? '').trim(),
+    address: String(input.address ?? '').trim(),
     daysRemaining: daysUntilNextContact,
   };
 }
@@ -510,6 +557,7 @@ async function updateClientInWorkbook(filePath, clientId, input) {
     ['Last Date With Attorney', dateFromInput(input.lastAttorneyDate) || ''],
     ['Payment Status', String(input.paymentStatus ?? '').trim()],
     ['NOTES', String(input.notes ?? '').trim()],
+    ...Object.entries(personalValues(master, input, rowNumber)),
   ].map(([header, value]) => [findColumn(master, header), value]).filter(([column]) => column);
 
   const archive = unzipSync(new Uint8Array(await readFile(filePath)));
