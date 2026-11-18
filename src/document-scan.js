@@ -13,7 +13,7 @@ function cleanLines(text) {
   return String(text || '')
     .replace(/[«‹]/g, '<')
     .split(/\r?\n/)
-    .map((line) => line.replace(/[|]/g, ' ').replace(/\s+/g, ' ').trim())
+    .map((line) => line.replace(/[|]/g, ' ').replace(/^[^A-Za-z0-9<]+/, '').replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 }
 
@@ -84,7 +84,8 @@ const GENDERS = { M: 'Male', MALE: 'Male', MASCULINO: 'Male', H: 'Male', F: 'Fem
 
 function readGender(lines) {
   const value = labeled(lines, 'SEX|SEXO|GENDER', (text) => /^(MALE|FEMALE|MASCULINO|FEMENINO|[MFX])\b/i.test(text));
-  const word = value.match(/^(MALE|FEMALE|MASCULINO|FEMENINO|[MFX])\b/i)?.[1]?.toUpperCase();
+  const word = value.match(/^(MALE|FEMALE|MASCULINO|FEMENINO|[MFX])\b/i)?.[1]?.toUpperCase()
+    || lines.join('\n').match(/SEX[O]?\s*[:.]?\s*(MALE|FEMALE|[MFX])\b/i)?.[1]?.toUpperCase();
   return GENDERS[word] || '';
 }
 
@@ -127,7 +128,8 @@ function nameLine(line) {
   const text = line.replace(/^(?:\d{1,2}[a-z]?|[lI])\s+/, '').trim();
   const words = text.split(/\s+/);
   if (!words.length || words.length > 4) return '';
-  if (!words.every((word) => /^[A-Za-z][A-Za-z'-]+$/.test(word) && !CARD_WORDS.test(word))) return '';
+  if (!words.every((word) => /^[A-Za-z][A-Za-z'-]+$/.test(word))) return '';
+  if (words.every((word) => CARD_WORDS.test(word))) return '';
   return text;
 }
 
@@ -140,12 +142,27 @@ function readName(lines) {
 
   // US licenses number their fields: "1 FAMILYNAME" and "2 GIVEN NAMES".
   // OCR often reads the "1" as l or I and the "2" as Z, and can run the number into the name.
-  const numbered = (pattern) => lines
-    .map((line) => line.match(new RegExp(`^(?:${pattern})[\\s.:]*([A-Z][A-Z'-]+(?: [A-Z][A-Z'-]+)*)`)))
-    .find((match) => match && !CARD_WORDS.test(match[1].split(' ')[0]))?.[1] || '';
-  const family = cleanName(numbered('1|l|I(?=\\s)'));
-  const first = cleanName(numbered('2|Z(?=\\s)'));
-  if (family && first) return `${first} ${family}`;
+  const numbered = (pattern) => {
+    const index = lines.findIndex((line) => {
+      const match = line.match(new RegExp(`^(?:${pattern})[\\s.:]*([A-Z][A-Z'-]+(?: [A-Z][A-Z'-]+)*)`));
+      return match && !CARD_WORDS.test(match[1].split(' ')[0]);
+    });
+    if (index < 0) return { index, name: '' };
+    const match = lines[index].match(new RegExp(`^(?:${pattern})[\\s.:]*([A-Z][A-Z'-]+(?: [A-Z][A-Z'-]+)*)`));
+    return { index, name: cleanName(match[1]) };
+  };
+  const family = numbered('1|l|I(?=\\s)');
+  const givenField = numbered('2|Z(?=\\s)');
+  if (family.name && givenField.name) return `${givenField.name} ${family.name}`;
+  const neighbour = (index) => nameLine(lines[index + 1] || '') || nameLine(lines[index - 1] || '');
+  if (givenField.name) {
+    const other = neighbour(givenField.index);
+    if (other) return cleanName(`${givenField.name} ${other}`);
+  }
+  if (family.name) {
+    const other = neighbour(family.index);
+    if (other) return cleanName(`${other} ${family.name}`);
+  }
 
   const labeledName = cleanName(labeled(lines, '(?<!LAST |FIRST |FAMILY |GIVEN )NAME', isName));
   if (labeledName) return labeledName;
@@ -180,7 +197,7 @@ function oldestBirthDate(text) {
 function readAddress(lines) {
   const labeledAddress = labeled(lines, 'ADDRESS|ADDR|DOMICILIO', (value) => /\d/.test(value));
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index].replace(/^8\s+(?=\d)/, '');
+    const line = lines[index].replace(/^8\s+(?=\d)/, '').replace(/[.,]+$/, '');
     if (!STREET_PATTERN.test(line)) continue;
     const next = lines[index + 1] || '';
     return CITY_PATTERN.test(next) ? `${line}, ${next}` : line;
@@ -244,7 +261,7 @@ async function prepareImage(file) {
     throw new Error('This image could not be opened. Use a JPG, PNG, or WebP photo.');
   }
   const longest = Math.max(bitmap.width, bitmap.height);
-  const scale = Math.min(4, Math.max(1, 2400 / longest));
+  const scale = Math.min(2.5, Math.max(1, 1400 / longest));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(bitmap.width * scale);
   canvas.height = Math.round(bitmap.height * scale);
@@ -268,27 +285,48 @@ export function mergeScans(first, second) {
   };
 }
 
+let workerPromise = null;
+let reportProgress = () => {};
+
+function getWorker() {
+  if (!workerPromise) {
+    workerPromise = import('tesseract.js')
+      .then(({ createWorker }) => createWorker('eng', 1, {
+        logger: (message) => {
+          if (message.status === 'recognizing text') reportProgress(message.progress);
+        },
+      }))
+      .catch((error) => {
+        workerPromise = null;
+        throw error;
+      });
+  }
+  return workerPromise;
+}
+
+// Downloads and starts the OCR engine in the background so the first scan does not wait for it.
+export function warmUpScanner() {
+  getWorker().catch(() => {});
+}
+
 export async function scanDocument(file, onProgress = () => {}) {
   if (!file.type.startsWith('image/')) throw new Error('Upload a photo or scan of the document (JPG, PNG, or WebP). PDFs are not supported yet.');
   onProgress(0, 'Preparing image');
-  const image = await prepareImage(file);
-  const { createWorker } = await import('tesseract.js');
-  onProgress(0.05, 'Loading reader');
-  let pass = 0;
-  const worker = await createWorker('eng', 1, {
-    logger: (message) => {
-      if (message.status === 'recognizing text') onProgress(0.1 + (pass + message.progress) * 0.45, pass ? 'Reading again' : 'Reading text');
-    },
-  });
+  const [image, worker] = await Promise.all([prepareImage(file), getWorker().then((ready) => {
+    onProgress(0.1, 'Reading text');
+    return ready;
+  })]);
+  const read = async (mode, start, label) => {
+    reportProgress = (value) => onProgress(start + value * 0.45, label);
+    await worker.setParameters({ tessedit_pageseg_mode: mode });
+    return parseDocumentText((await worker.recognize(image)).data.text);
+  };
   try {
-    const first = parseDocumentText((await worker.recognize(image)).data.text);
+    const first = await read('3', 0.1, 'Reading text');
     if (first.fields.name && first.fields.dateOfBirth) return first;
     // Sparse-text mode finds scattered fields on ID cards that the default page layout misses.
-    pass = 1;
-    await worker.setParameters({ tessedit_pageseg_mode: '11' });
-    const second = parseDocumentText((await worker.recognize(image)).data.text);
-    return mergeScans(first, second);
+    return mergeScans(first, await read('11', 0.55, 'Reading again'));
   } finally {
-    await worker.terminate();
+    reportProgress = () => {};
   }
 }

@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { CASE_TYPES, countCaseTypes, isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
 import { pageFromPath, pathForPage } from './routes.js';
-import { scanDocument } from './document-scan.js';
+import { scanDocument, warmUpScanner } from './document-scan.js';
 
 const frequencies = [
   'Once a Month',
@@ -266,6 +266,8 @@ function DocumentScanner({ onScanned }) {
   const [message, setMessage] = useState('');
   const [dragging, setDragging] = useState(false);
   const [rawText, setRawText] = useState('');
+
+  useEffect(() => warmUpScanner(), []);
 
   useEffect(() => () => preview && URL.revokeObjectURL(preview), [preview]);
 
