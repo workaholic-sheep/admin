@@ -26,6 +26,7 @@ import {
   Search,
   SlidersHorizontal,
   ShieldCheck,
+  Trash2,
   UsersRound,
   X,
 } from 'lucide-react';
@@ -222,7 +223,7 @@ function CaseTypePicker({ value, onChange }) {
     <fieldset className="case-type-picker field field-wide">
       <legend>Case type</legend>
       <div className="case-type-options">
-        {CASE_TYPES.map((caseType) => <label className="case-type-option" key={caseType}>
+        {CASE_TYPES.map((caseType) => <label className={`case-type-option ${isCaseTypeSelected(value, caseType) ? 'selected' : ''}`} key={caseType}>
           <input type="checkbox" checked={isCaseTypeSelected(value, caseType)} onChange={(event) => onChange(updateCaseTypeValue(value, caseType, event.target.checked))} />
           <span>{caseType}</span>
         </label>)}
@@ -825,6 +826,22 @@ function WorkPermitList({ clients = [], onToast }) {
     }
   }
 
+  async function removeRecord(record) {
+    if (!window.confirm(`Remove ${record.name} (${record.id}) from work permits? This deletes their row from the spreadsheet and their tracking link will stop working.`)) return;
+    setBusyId(record.id);
+    try {
+      await send(`/api/work-permits/${encodeURIComponent(record.id)}`, { method: 'DELETE' });
+      setRecords((current) => current.filter((item) => item.id !== record.id));
+      if (editing === record.id) setEditing(null);
+      if (shared?.id === record.id) setShared(null);
+      onToast(`${record.name} removed from work permits`);
+    } catch (removeError) {
+      onToast(removeError.message);
+    } finally {
+      setBusyId('');
+    }
+  }
+
   async function copyLink(record) {
     setBusyId(record.id);
     try {
@@ -943,6 +960,7 @@ function WorkPermitList({ clients = [], onToast }) {
                   <button className="button button-secondary" onClick={() => startEdit(record)} aria-label={`Edit ${record.name}`}><Pencil size={14} />Edit</button>
                   <button className={`button button-secondary clock-button ${paused ? 'is-paused' : ''}`} onClick={() => toggleClock(record)} disabled={busy || !record.filingDate || record.decision !== 'Pending'} title={!record.filingDate ? "Add the Init Asylum Rec'd Date first" : record.decision !== 'Pending' ? 'The clock no longer applies after a decision' : ''}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? 'Resume' : 'Pause'}</button>
                   <button className="button button-secondary" onClick={() => copyLink(record)} disabled={busy}><Link2 size={14} />Copy link</button>
+                  <button className="button button-secondary button-remove" onClick={() => removeRecord(record)} disabled={busy} aria-label={`Remove ${record.name}`}><Trash2 size={14} />Remove</button>
                 </div>
               </li>
             );

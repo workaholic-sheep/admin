@@ -71,6 +71,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .button-primary:disabled { opacity: .65; cursor: wait; }
 .button-secondary { border-color: #dce4dc; background: #fff; color: #41594a; }
 .button-secondary:hover { background: #f7faf7; }
+.button-remove { color: #a5442f; }
+.button-remove:hover:not(:disabled) { border-color: #e8c9c0; background: #f9e9e5; }
 .page-content { width: min(1220px, 100%); margin: 0 auto; padding: 36px 40px 24px; }
 .welcome-row { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 24px; animation: appear .35s ease both; }
 .welcome-row h1 { margin: 9px 0 3px; color: #26392e; font-family: 'DM Serif Display', Georgia, serif; font-size: 35px; font-weight: 400; letter-spacing: 0; line-height: 1.08; }
@@ -282,7 +284,7 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
 .case-type-options { display: flex; flex-wrap: wrap; gap: 7px; }
 .case-type-option { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 5px 9px; border: 1px solid #dfe6df; border-radius: 4px; background: #fff; color: #56675d; font-size: 10px; font-weight: 600; cursor: pointer; }
 .case-type-option.selected { border-color: #b7cdb9; background: #edf4ed; color: var(--forest-dark); }
-.case-type-option input { width: 15px; height: 15px; flex: none; margin: 0; padding: 0; accent-color: var(--forest); }
+.case-type-picker .case-type-option input { width: 15px; min-width: 15px; height: 15px; flex: none; margin: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--forest); }
 @keyframes slide-in { from { transform: translateX(22px); opacity: .7; } to { transform: translateX(0); opacity: 1; } }
 .drawer-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; padding: 25px 26px 20px; border-bottom: 1px solid var(--line); }
 .drawer-header h2 { margin: 7px 0 0; color: #2c4034; font-family: 'DM Serif Display', Georgia, serif; font-size: 27px; font-weight: 400; letter-spacing: 0; }
@@ -299,7 +301,7 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
 .case-type-options { display: flex; flex-wrap: wrap; gap: 7px; }
 .case-type-option { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 5px 9px; border: 1px solid #dfe6df; border-radius: 4px; background: #fff; color: #56675d; font-size: 10px; font-weight: 600; cursor: pointer; }
 .case-type-option.selected { border-color: #b7cdb9; background: #edf4ed; color: var(--forest-dark); }
-.case-type-option input { width: 15px; height: 15px; flex: none; margin: 0; padding: 0; accent-color: var(--forest); }
+.case-type-picker .case-type-option input { width: 15px; min-width: 15px; height: 15px; flex: none; margin: 0; padding: 0; border: 0; box-shadow: none; accent-color: var(--forest); }
 .field input, .field select, .field textarea { width: 100%; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid #dfe6df; border-radius: 4px; outline: 0; background: #fff; color: #35483c; font-size: 11px; font-weight: 400; }
 .field textarea { height: auto; min-height: 68px; padding-top: 9px; resize: vertical; }
 .field select { padding-right: 27px; appearance: none; cursor: pointer; }

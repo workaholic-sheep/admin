@@ -266,5 +266,16 @@ export function createWorkPermitWorkbookStore(filePath) {
       queue = operation.catch(() => {});
       return operation;
     },
+    remove(id) {
+      const operation = queue.then(async () => {
+        const records = await list();
+        const record = records.find((item) => item.id === id);
+        if (!record) throw new WorkPermitError('Work permit not found.', 404);
+        await save(records.filter((item) => item.id !== id));
+        return record;
+      });
+      queue = operation.catch(() => {});
+      return operation;
+    },
   };
 }

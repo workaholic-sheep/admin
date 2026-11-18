@@ -641,6 +641,33 @@ export function createGoogleSheetStore({
     }
   }
 
+  // Deletes the client's whole row from the work permit tab.
+  async function removeWorkPermit(id) {
+    const sheets = getSheetsClient();
+    const context = { label: 'work permit', envName: 'GOOGLE_WORK_PERMIT_SHEET_ID', serviceAccountEmail, write: true };
+    try {
+      const title = await resolveTab(sheets, workPermitSpreadsheetId, workPermitSheetName, 'work permit');
+      const { data: meta } = await sheets.spreadsheets.get({ spreadsheetId: workPermitSpreadsheetId, fields: 'sheets.properties(sheetId,title)' });
+      const sheetId = (meta.sheets || []).find((sheet) => sheet.properties?.title === title)?.properties?.sheetId;
+      if (sheetId === undefined) throw new SheetSetupError(`The work permit spreadsheet has no tab named "${title}".`);
+      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: workPermitSpreadsheetId, range: `${quoteSheetName(title)}!A:Z`, valueRenderOption: 'FORMATTED_VALUE' });
+      const values = data.values || [];
+      const headers = (values[0] || []).map((header) => String(header ?? '').trim());
+      const idColumn = headers.indexOf('ClientID');
+      const rowIndex = idColumn === -1 ? -1 : values.findIndex((row, index) => index > 0 && String(row[idColumn] ?? '').trim() === id);
+      if (rowIndex === -1) throw new WorkPermitError('Work permit not found.', 404);
+      const record = mapWorkPermit(Object.fromEntries(headers.map((header, index) => [header, values[rowIndex][index] ?? ''])));
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: workPermitSpreadsheetId,
+        requestBody: { requests: [{ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 } } }] },
+      });
+      return record;
+    } catch (error) {
+      resolvedTitles.delete(`${workPermitSpreadsheetId}|${workPermitSheetName}`);
+      throw explainGoogleError(error, context);
+    }
+  }
+
   return {
     list,
     listCourtDates,
@@ -654,6 +681,11 @@ export function createGoogleSheetStore({
       },
       update: (id, mutate) => {
         const operation = queuedWrite.then(() => updateWorkPermit(id, mutate));
+        queuedWrite = operation.catch(() => {});
+        return operation;
+      },
+      remove: (id) => {
+        const operation = queuedWrite.then(() => removeWorkPermit(id));
         queuedWrite = operation.catch(() => {});
         return operation;
       },

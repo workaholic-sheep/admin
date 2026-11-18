@@ -228,6 +228,16 @@ app.post('/api/work-permits', async (request, response, next) => {
   }
 });
 
+app.delete('/api/work-permits/:id', async (request, response, next) => {
+  try {
+    if (!(await requireWorkPermits(response))) return;
+    const record = await workPermitStore.remove(request.params.id);
+    response.json({ removed: { id: record.id, name: record.name } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/work-permits/:id/pause', async (request, response, next) => {
   try {
     if (!(await requireWorkPermits(response))) return;
