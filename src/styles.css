@@ -500,3 +500,22 @@ body { font-size: var(--type-body); }
 .toast { font-size: 18px; }
 .login-panel h1 { font-size: 34px; }
 .login-panel > p { font-size: var(--type-label); }
+
+/* Document scan on client intake */
+.document-scan { display: flex; align-items: center; gap: 13px; margin: 0 0 22px; padding: 13px 14px; border: 1px dashed #c4d4c6; border-radius: 6px; background: #f7faf7; transition: border-color .16s ease, background .16s ease; }
+.document-scan.is-dragging { border-color: var(--forest); background: #edf4ed; }
+.document-scan.is-error, .document-scan.is-empty { border-color: #e6c3b8; background: #fcf4f1; }
+.document-scan.is-done { border-style: solid; border-color: #b7cdb9; }
+.document-scan-icon { display: grid; flex: none; width: 40px; height: 40px; place-items: center; border-radius: 6px; background: #e6eee7; color: var(--forest); }
+.document-scan-preview { flex: none; width: 64px; height: 42px; border: 1px solid #dfe6df; border-radius: 4px; object-fit: cover; background: #fff; }
+.document-scan-body { display: grid; flex: 1; min-width: 0; gap: 5px; }
+.document-scan-body strong { color: #35483c; font-size: var(--type-label, 12px); font-weight: 700; }
+.document-scan-body > span:not(.clock-bar) { color: #6f7d74; font-size: var(--type-small, 11px); line-height: 1.45; }
+.document-scan.is-error .document-scan-body > span, .document-scan.is-empty .document-scan-body > span { color: #a5442f; }
+.document-scan .button { flex: none; }
+.field input.is-scanned, .field textarea.is-scanned { border-color: #9dbca3; background: #f1f7f1; }
+.spin { animation: rotate 1s linear infinite; }
+@media (max-width: 560px) {
+  .document-scan { flex-wrap: wrap; }
+  .document-scan .button { width: 100%; }
+}

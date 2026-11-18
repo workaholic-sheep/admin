@@ -15,6 +15,7 @@ import {
   EyeOff,
   FileSpreadsheet,
   LayoutDashboard,
+  LoaderCircle,
   Link2,
   LogOut,
   Menu,
@@ -23,15 +24,18 @@ import {
   Play,
   Plus,
   RefreshCw,
+  ScanText,
   Search,
   SlidersHorizontal,
   ShieldCheck,
   Trash2,
+  Upload,
   UsersRound,
   X,
 } from 'lucide-react';
 import { CASE_TYPES, countCaseTypes, isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
 import { pageFromPath, pathForPage } from './routes.js';
+import { scanDocument } from './document-scan.js';
 
 const frequencies = [
   'Once a Month',
@@ -233,6 +237,84 @@ function CaseTypePicker({ value, onChange }) {
   );
 }
 
+function DocumentScanner({ onScanned }) {
+  const inputRef = useRef(null);
+  const [state, setState] = useState('idle');
+  const [progress, setProgress] = useState({ value: 0, label: '' });
+  const [preview, setPreview] = useState('');
+  const [message, setMessage] = useState('');
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => () => preview && URL.revokeObjectURL(preview), [preview]);
+
+  async function read(file) {
+    if (!file || state === 'scanning') return;
+    setPreview(file.type.startsWith('image/') ? URL.createObjectURL(file) : '');
+    setState('scanning');
+    setMessage('');
+    setProgress({ value: 0, label: 'Preparing image' });
+    try {
+      const result = await scanDocument(file, (value, label) => setProgress({ value, label }));
+      const summary = onScanned(result);
+      setState(summary.found ? 'done' : 'empty');
+      setMessage(summary.found ? summary.text : 'No details could be read. Try a sharper, well-lit photo taken straight on.');
+    } catch (scanError) {
+      setState('error');
+      setMessage(scanError.message || 'This document could not be read.');
+    }
+  }
+
+  function choose(event) {
+    read(event.target.files?.[0]);
+    event.target.value = '';
+  }
+
+  function drop(event) {
+    event.preventDefault();
+    setDragging(false);
+    read(event.dataTransfer.files?.[0]);
+  }
+
+  const scanning = state === 'scanning';
+  const percent = Math.round(progress.value * 100);
+  return (
+    <div
+      className={`document-scan is-${state}${dragging ? ' is-dragging' : ''}`}
+      onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={drop}
+    >
+      {preview ? <img className="document-scan-preview" src={preview} alt="Uploaded document" /> : <span className="document-scan-icon"><ScanText size={20} /></span>}
+      <div className="document-scan-body" aria-live="polite">
+        <strong>{scanning ? `${progress.label}… ${percent}%` : 'Fill from an ID or document'}</strong>
+        {scanning
+          ? <span className="clock-bar"><i style={{ width: `${percent}%` }} /></span>
+          : <span>{message || "Upload or drop a photo of a driver's license, passport, or EAD card. It is read on this computer and never uploaded."}</span>}
+      </div>
+      <input ref={inputRef} type="file" accept="image/*" hidden onChange={choose} />
+      <button type="button" className="button button-secondary" onClick={() => inputRef.current?.click()} disabled={scanning}>
+        {scanning ? <LoaderCircle size={15} className="spin" /> : <Upload size={15} />}{preview && !scanning ? 'Scan another' : 'Upload'}
+      </button>
+    </div>
+  );
+}
+
+function applyScan(current, result) {
+  const next = { ...current };
+  const filled = [];
+  for (const key of ['name', 'email', 'phone']) {
+    if (result.fields[key]) {
+      next[key] = result.fields[key];
+      filled.push(key);
+    }
+  }
+  if (result.details.length) {
+    const block = `From scanned ${result.docType}: ${result.details.map(({ label, value }) => `${label} ${value}`).join('; ')}`;
+    next.notes = (current.notes.trim() ? `${current.notes.trim()}\n${block}` : block).slice(0, 2000);
+  }
+  return { next, filled };
+}
+
 function ClientForm({ onClose, onCreated }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -253,7 +335,30 @@ function ClientForm({ onClose, onCreated }) {
     notes: '',
   });
 
-  const update = (event) => setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
+  const [scannedFields, setScannedFields] = useState(() => new Set());
+  const update = (event) => {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+    setScannedFields((current) => {
+      if (!current.has(name)) return current;
+      const next = new Set(current);
+      next.delete(name);
+      return next;
+    });
+  };
+  const scanned = (name) => (scannedFields.has(name) ? 'is-scanned' : undefined);
+
+  function fillFromScan(result) {
+    const { next, filled } = applyScan(form, result);
+    setForm(next);
+    const fields = new Set(filled);
+    if (result.details.length) fields.add('notes');
+    setScannedFields(fields);
+    const parts = [];
+    if (filled.length) parts.push(`filled ${filled.join(', ')}`);
+    if (result.details.length) parts.push(`added ${result.details.map((detail) => detail.label.toLowerCase()).join(', ')} to notes`);
+    return { found: parts.length > 0, text: `Read a ${result.docType}: ${parts.join('; ')}. Check each highlighted value before saving.` };
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -285,11 +390,12 @@ function ClientForm({ onClose, onCreated }) {
           <button className="icon-button" onClick={onClose} aria-label="Close intake"><X size={18} /></button>
         </div>
         <form onSubmit={submit} className="intake-form">
+          <DocumentScanner onScanned={fillFromScan} />
           <div className="form-section-title"><span>01</span><h3>Client details</h3></div>
           <div className="form-grid">
-            <label className="field field-wide">Client name <b>*</b><input autoFocus name="name" value={form.name} onChange={update} required maxLength={120} placeholder="Full name" /></label>
-            <label className="field">Email<input name="email" type="email" value={form.email} onChange={update} maxLength={180} placeholder="name@example.com" /></label>
-            <label className="field">Phone<input name="phone" value={form.phone} onChange={update} maxLength={40} placeholder="Phone number" /></label>
+            <label className="field field-wide">Client name <b>*</b><input autoFocus className={scanned('name')} name="name" value={form.name} onChange={update} required maxLength={120} placeholder="Full name" /></label>
+            <label className="field">Email<input className={scanned('email')} name="email" type="email" value={form.email} onChange={update} maxLength={180} placeholder="name@example.com" /></label>
+            <label className="field">Phone<input className={scanned('phone')} name="phone" value={form.phone} onChange={update} maxLength={40} placeholder="Phone number" /></label>
             <CaseTypePicker value={form.caseType} onChange={(caseType) => setForm((current) => ({ ...current, caseType }))} />
             <label className="field">Meeting frequency<select name="frequency" value={form.frequency} onChange={update}>{frequencies.map((frequency) => <option key={frequency}>{frequency}</option>)}</select><ChevronDown size={15} /></label>
             <label className="field">Translator needed<select name="translator" value={form.translator} onChange={update}><option>No</option><option>Yes</option></select><ChevronDown size={15} /></label>
@@ -304,7 +410,7 @@ function ClientForm({ onClose, onCreated }) {
             <label className="field">Last date with attorney<input type="date" name="lastAttorneyDate" value={form.lastAttorneyDate} onChange={update} /></label>
             <label className="field">Outcome<select name="outcome" value={form.outcome} onChange={update}><option value="">Choose outcome</option><option>Responsive</option><option>Unresponsive</option></select><ChevronDown size={15} /></label>
             <label className="field">Payment status<select name="paymentStatus" value={form.paymentStatus} onChange={update}><option>Pending</option><option>Up to Date</option></select><ChevronDown size={15} /></label>
-            <label className="field field-wide">Notes<textarea name="notes" value={form.notes} onChange={update} rows={3} maxLength={2000} placeholder="Add a note for this client" /></label>
+            <label className="field field-wide">Notes<textarea className={scanned('notes')} name="notes" value={form.notes} onChange={update} rows={3} maxLength={2000} placeholder="Add a note for this client" /></label>
           </div>
           {error && <div className="form-error" role="alert">{error}</div>}
           <div className="form-footer"><span>Saved to MasterData</span><button className="button button-primary" type="submit" disabled={saving}><Plus size={16} />{saving ? 'Saving…' : 'Add client'}</button></div>
