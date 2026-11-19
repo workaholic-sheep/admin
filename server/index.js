@@ -12,6 +12,7 @@ import { CaseNotFoundError, CaseSetupError, createCaseAssignments } from './case
 import { TEAM_MEMBERS } from '../src/team.js';
 import { nameParts } from '../src/names.js';
 import { CASE_STATUSES } from '../src/case-status.js';
+import { ScheduleError, createSchedule, scheduleInput } from './schedule.js';
 import { createGoogleTabs, createWorkbookTabs } from './sheet-tabs.js';
 import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
 import {
@@ -68,6 +69,7 @@ try {
   caseSetupMessage = error.message;
 }
 const cases = createCaseAssignments(caseTabs, caseSetupMessage);
+const schedule = createSchedule(caseTabs, caseSetupMessage);
 const SYNC_EVERY_MS = 60 * 1000;
 let lastSync = 0;
 // Without CREDENTIALS_KEY in production the rest of the app still runs; only the password manager reports that it needs setup.
@@ -249,6 +251,33 @@ app.put(['/api/case-assignments/team', '/api/case-assignments/status'], async (r
     next(error);
   }
 });
+
+// Attorney schedule (Schedule_Tracker tab). Times are Central Time as entered.
+const scheduleRoute = (handler) => async (request, response, next) => {
+  try {
+    await handler(request, response);
+  } catch (error) {
+    if (error instanceof ScheduleError) return response.status(error.status).json({ error: error.message });
+    if (error instanceof CaseSetupError) return response.status(503).json({ error: error.message });
+    return next(error);
+  }
+};
+
+app.get('/api/schedule', scheduleRoute(async (_request, response) => {
+  response.json({ entries: await schedule.list() });
+}));
+
+app.post('/api/schedule', scheduleRoute(async (request, response) => {
+  response.status(201).json({ entry: await schedule.add(scheduleInput(request.body, await store.list())) });
+}));
+
+app.put('/api/schedule/:id', scheduleRoute(async (request, response) => {
+  response.json({ entry: await schedule.update(request.params.id, scheduleInput(request.body, await store.list())) });
+}));
+
+app.delete('/api/schedule/:id', scheduleRoute(async (request, response) => {
+  response.json({ entry: await schedule.remove(request.params.id) });
+}));
 
 // Case notes: an add-only log in the Case_Notes tab. The server stamps each note in Central Time.
 app.get('/api/case-notes', async (request, response, next) => {

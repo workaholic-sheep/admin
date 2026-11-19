@@ -14,6 +14,7 @@ import {
   FileCheck2,
   FileText,
   CreditCard,
+  ExternalLink,
   Eye,
   EyeOff,
   FileSpreadsheet,
@@ -24,11 +25,13 @@ import {
   LoaderCircle,
   Link2,
   LogOut,
+  MapPin,
   Menu,
   MessageSquareText,
   Moon,
   Pause,
   Pencil,
+  Phone,
   Play,
   Plus,
   RefreshCw,
@@ -41,6 +44,7 @@ import {
   Upload,
   UserRound,
   UsersRound,
+  Video,
   X,
 } from 'lucide-react';
 import { CASE_TYPES, countCaseTypes, isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
@@ -49,6 +53,7 @@ import { scanDocument, warmUpScanner } from './document-scan.js';
 import { TEAM_MEMBERS } from './team.js';
 import { splitName } from './names.js';
 import { CASE_STATUSES, caseStatusTone } from './case-status.js';
+import { SCHEDULE_MODES, SCHEDULE_STATUSES, timeTo24h } from './schedule.js';
 
 const frequencies = [
   'Once a Month',
@@ -1226,6 +1231,196 @@ function siteHost(url) {
   try { return new URL(url).host.replace(/^www\./, ''); } catch { return ''; }
 }
 
+const emptyAppointment = { date: '', time: '', mode: 'Zoom', location: '', purpose: '', clientId: '', clientName: '', caseType: '', addedBy: '', status: 'Scheduled' };
+const MODE_TONES = { Zoom: 'zoom', 'In Person': 'person', 'Phone Call': 'phone' };
+
+function centralNowTime() {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: CENTRAL_TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+}
+
+function dayLabel(date, today) {
+  const tomorrow = new Date(`${today}T12:00:00Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  if (date === today) return 'Today';
+  if (date === tomorrow.toISOString().slice(0, 10)) return 'Tomorrow';
+  return new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`));
+}
+
+const isWebLink = (value) => /^https?:\/\//i.test(String(value || '').trim());
+
+// Attorney appointments, saved in the Schedule_Tracker tab. Dates and times are Central Time.
+function SchedulePage({ clients, onSelectClient, onToast }) {
+  const [entries, setEntries] = useState([]);
+  const [loadState, setLoadState] = useState('loading');
+  const [loadError, setLoadError] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState(emptyAppointment);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [rowError, setRowError] = useState('');
+  const [show, setShow] = useState('upcoming');
+  const [modeFilter, setModeFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const today = centralDateKey();
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/schedule')
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load the schedule.');
+        if (active) { setEntries(result.entries || []); setLoadState('ready'); }
+      })
+      .catch((error) => { if (active) { setLoadError(error.message); setLoadState('error'); } });
+    return () => { active = false; };
+  }, []);
+
+  const pickedClient = clients.find((client) => client.id === form.clientId);
+  const clientCases = pickedClient ? CASE_TYPES.filter((type) => isCaseTypeSelected(pickedClient.caseType, type)) : CASE_TYPES;
+
+  function startEdit(entry) {
+    setEditing(entry ? entry.id : 'new');
+    let author = '';
+    try { author = localStorage.getItem('note-author') || ''; } catch { /* no saved choice */ }
+    setForm(entry
+      ? { ...emptyAppointment, ...entry, time: timeTo24h(entry.time) }
+      : { ...emptyAppointment, date: today, addedBy: TEAM_MEMBERS.includes(author) ? author : '' });
+    setFormError('');
+  }
+
+  const update = (event) => setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
+
+  async function send(id, values) {
+    const isNew = id === 'new';
+    const response = await fetch(isNew ? '/api/schedule' : `/api/schedule/${encodeURIComponent(id)}`, {
+      method: isNew ? 'POST' : 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(values),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not save this appointment.');
+    setEntries((current) => isNew ? [...current, result.entry] : current.map((item) => item.id === id ? result.entry : item));
+    return result.entry;
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    if (form.clientName.trim() && !form.clientId) {
+      setFormError('Pick the client from the suggestions, or clear the client box.');
+      return;
+    }
+    setSaving(true);
+    setFormError('');
+    try {
+      const entry = await send(editing, form);
+      try { localStorage.setItem('note-author', form.addedBy); } catch { /* remembered for this visit only */ }
+      onToast(`${editing === 'new' ? 'Scheduled' : 'Updated'}: ${entry.purpose}, ${formatDate(entry.date)} ${entry.time} CT`);
+      setEditing(null);
+    } catch (error) {
+      setFormError(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function setStatus(entry, status) {
+    setRowError('');
+    try {
+      await send(entry.id, { ...entry, time: timeTo24h(entry.time), status });
+      onToast(`${entry.purpose}: ${status}`);
+    } catch (error) {
+      setRowError(error.message);
+    }
+  }
+
+  async function remove(entry) {
+    if (!window.confirm(`Delete "${entry.purpose}" on ${formatDate(entry.date)} at ${entry.time} CT?`)) return;
+    setRowError('');
+    try {
+      const response = await fetch(`/api/schedule/${encodeURIComponent(entry.id)}`, { method: 'DELETE' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not delete this appointment.');
+      setEntries((current) => current.filter((item) => item.id !== entry.id));
+      onToast('Appointment deleted');
+    } catch (error) {
+      setRowError(error.message);
+    }
+  }
+
+  const sortKey = (entry) => `${entry.date} ${timeTo24h(entry.time) || '99:99'}`;
+  const query = search.trim().toLowerCase();
+  const upcomingCount = entries.filter((entry) => entry.date >= today && entry.status === 'Scheduled').length;
+  const visible = entries
+    .filter((entry) => show === 'all' || (show === 'today' ? entry.date === today : show === 'past' ? entry.date < today : entry.date >= today))
+    .filter((entry) => modeFilter === 'all' || entry.mode === modeFilter)
+    .filter((entry) => !query || [entry.purpose, entry.clientName, entry.location, entry.addedBy, entry.caseType].some((value) => String(value || '').toLowerCase().includes(query)))
+    .sort((left, right) => (show === 'past' ? sortKey(right).localeCompare(sortKey(left)) : sortKey(left).localeCompare(sortKey(right))));
+  const days = [];
+  for (const entry of visible) {
+    if (days.at(-1)?.date !== entry.date) days.push({ date: entry.date, entries: [] });
+    days.at(-1).entries.push(entry);
+  }
+  const nowTime = centralNowTime();
+  const empty = loadState === 'loading' ? ['Loading the schedule…', '']
+    : loadState === 'error' ? ['Could not load the schedule', loadError]
+      : !entries.length ? ['Nothing scheduled yet', 'Use “Add appointment” to put the first one on the attorney’s schedule.']
+        : ['Nothing to show', show === 'upcoming' ? 'No upcoming appointments match. Try “All” or another filter.' : 'Try a different filter or search.'];
+
+  return (
+    <>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">ATTORNEY SCHEDULE · {upcomingCount} UPCOMING · CENTRAL TIME</span><h1>Schedule</h1><p className="page-subtitle">Appointments for the attorney, with how each one will happen.</p></div><button className="button button-primary" onClick={() => startEdit(null)} disabled={loadState !== 'ready'}><Plus size={16} />Add appointment</button></div>
+      {editing && <form className="surface reminder-form" onSubmit={save}>
+        <div className="form-grid">
+          <label className="field">Date<input type="date" name="date" value={form.date} onChange={update} required autoFocus /></label>
+          <label className="field">Time (Central)<input type="time" name="time" value={form.time} onChange={update} required step={300} /></label>
+          <fieldset className="case-type-picker field-wide"><legend>Mode of communication</legend><div className="case-type-options">{SCHEDULE_MODES.map((mode) => <label key={mode} className={`case-type-option ${form.mode === mode ? 'selected' : ''}`}><input type="radio" name="mode" value={mode} checked={form.mode === mode} onChange={update} />{mode}</label>)}</div></fieldset>
+          <label className="field field-wide">{form.mode === 'Zoom' ? 'Zoom link' : form.mode === 'In Person' ? 'Location' : 'Phone number'}<input name="location" value={form.location} onChange={update} maxLength={500} placeholder={form.mode === 'Zoom' ? 'https://zoom.us/j/…' : form.mode === 'In Person' ? 'Office, courthouse or address' : 'Number to call'} /></label>
+          <label className="field field-wide">Purpose<b>*</b><input name="purpose" value={form.purpose} onChange={update} maxLength={300} required placeholder="e.g. VAWA intake consultation" /></label>
+          <label className="field">Client (optional)<NameSuggest value={form.clientName} clients={clients} onChange={(name) => setForm((current) => ({ ...current, clientName: name, clientId: '', caseType: '' }))} onPick={(client) => setForm((current) => ({ ...current, clientName: client.name, clientId: client.id, caseType: '' }))} /></label>
+          <label className="field">Case (optional)<select name="caseType" value={form.caseType} onChange={update}><option value="">None</option>{clientCases.map((type) => <option key={type}>{type}</option>)}</select><ChevronDown size={15} /></label>
+          <label className="field">Added by<select name="addedBy" value={form.addedBy} onChange={update} required><option value="" disabled>Choose…</option>{TEAM_MEMBERS.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
+          {editing !== 'new' && <label className="field">Status<select name="status" value={form.status} onChange={update}>{SCHEDULE_STATUSES.map((status) => <option key={status}>{status}</option>)}</select><ChevronDown size={15} /></label>}
+        </div>
+        {formError && <div className="form-error" role="alert">{formError}</div>}
+        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setEditing(null)}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : editing === 'new' ? 'Add to schedule' : 'Save changes'}</button></div>
+      </form>}
+      {rowError && <div className="load-error" role="alert"><span>{rowError}</span><button onClick={() => setRowError('')}>Dismiss <X size={14} /></button></div>}
+      <section className="surface roster-surface">
+        <div className="roster-toolbar">
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search purpose, client, place or team member" aria-label="Search the schedule" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+          <FilterMenu label="Show" value={show} onChange={setShow} icon={CalendarDays} options={[{ value: 'upcoming', label: 'Upcoming' }, { value: 'today', label: 'Today' }, { value: 'past', label: 'Past' }, { value: 'all', label: 'All' }]} />
+          <FilterMenu label="Mode" value={modeFilter} onChange={setModeFilter} icon={SlidersHorizontal} options={[{ value: 'all', label: 'All modes' }, ...SCHEDULE_MODES.map((mode) => ({ value: mode, label: mode }))]} />
+        </div>
+        {days.length ? days.map((day) => <div key={day.date} className={`schedule-day ${day.date === today ? 'is-today' : ''}`}>
+          <h3>{dayLabel(day.date, today)}{['Today', 'Tomorrow'].includes(dayLabel(day.date, today)) && <small>{formatDate(day.date)}</small>}</h3>
+          <ul className="schedule-list">
+            {day.entries.map((entry) => {
+              const client = clients.find((item) => item.id === entry.clientId);
+              const passed = entry.date < today || (entry.date === today && (timeTo24h(entry.time) || '99:99') < nowTime);
+              return <li key={entry.id} className={`schedule-item status-${entry.status.toLowerCase()} ${passed && entry.status === 'Scheduled' ? 'is-passed' : ''}`}>
+                <time className="schedule-time">{entry.time}<small>CT</small></time>
+                <span className={`mode-badge mode-${MODE_TONES[entry.mode] || 'other'}`}>{entry.mode === 'Zoom' ? <Video size={13} /> : entry.mode === 'In Person' ? <MapPin size={13} /> : <Phone size={13} />}{entry.mode || 'Not set'}</span>
+                <div className="schedule-main">
+                  <strong>{entry.purpose}</strong>
+                  <small>
+                    {entry.clientName && (client ? <button className="link-button" type="button" onClick={() => onSelectClient(client)}>{entry.clientName}</button> : <span>{entry.clientName}</span>)}
+                    {entry.caseType && <span className="case-pill">{entry.caseType}</span>}
+                    {entry.location && (isWebLink(entry.location) ? <a href={entry.location} target="_blank" rel="noopener noreferrer"><ExternalLink size={12} />Join</a> : <span className="schedule-place">{entry.location}</span>)}
+                  </small>
+                </div>
+                <span className="schedule-by">by {entry.addedBy || '—'}</span>
+                <select className={`schedule-status status-${entry.status.toLowerCase()}`} value={entry.status} onChange={(event) => setStatus(entry, event.target.value)} aria-label={`Status of ${entry.purpose}`}>{SCHEDULE_STATUSES.map((status) => <option key={status}>{status}</option>)}</select>
+                <span className="credential-actions"><button className="icon-button" onClick={() => startEdit(entry)} aria-label={`Edit ${entry.purpose}`} title="Edit"><Pencil size={14} /></button><button className="icon-button button-remove" onClick={() => remove(entry)} aria-label={`Delete ${entry.purpose}`} title="Delete"><Trash2 size={14} /></button></span>
+              </li>;
+            })}
+          </ul>
+        </div>) : <div className="table-empty"><CalendarClock size={22} /><strong>{empty[0]}</strong>{empty[1] && <span>{empty[1]}</span>}</div>}
+        <div className="table-foot"><span>Showing {visible.length} of {entries.length} appointments</span><span><i className="sync-dot" /> Saved to Schedule_Tracker · times in Central</span></div>
+      </section>
+    </>
+  );
+}
+
 function CredentialsPage({ onToast }) {
   const [records, setRecords] = useState([]);
   const [loadState, setLoadState] = useState('loading');
@@ -2076,7 +2271,7 @@ export default function App() {
   const inClientsSection = page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates');
   const extraTab = EXTRA_TABS.find((tab) => tab.page === page);
   const showAddClient = page === 'dashboard' || page === 'clients' || Boolean(resultView);
-  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit' })[page] || extraTab?.label
+  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit', schedule: 'Schedule' })[page] || extraTab?.label
     || (resultView === 'court-dates' ? 'Court dates' : resultView.startsWith('case:') ? `${resultView.slice('case:'.length)} clients` : ({ payments: 'Payment list', 'follow-ups': 'Upcoming follow-ups', 'follow-ups-week': 'Follow-ups this week', clients: 'Client roster' })[resultView])
     || 'Overview';
   if (authStatus === 'checking') return <main className="login-screen"><img className="login-mark" src="/logo.png" alt="Loading" width="48" height="48" /></main>;
@@ -2102,7 +2297,7 @@ export default function App() {
               title={`Show ${type} clients, or drop clients here to add them to ${type}`}
             ><span>{type}</span><span className="nav-count">{caseCounts[type]}</span></button>)}
           </div>}
-        </div><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
+        </div><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'schedule' ? 'active' : ''}`} onClick={() => setPage('schedule')}><CalendarClock size={18} /><span>Schedule</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
       <main className="main-area">
@@ -2122,6 +2317,8 @@ export default function App() {
                 ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
                 : resultView
                   ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} notesVersion={notesVersion} view={resultView} />
+              : page === 'schedule'
+                ? <SchedulePage clients={clients} onSelectClient={setSelectedClient} onToast={setToast} />
               : page === 'credentials'
                 ? <CredentialsPage onToast={setToast} />
               : extraTab
