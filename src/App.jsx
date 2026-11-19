@@ -7,6 +7,7 @@ import {
   CalendarDays,
   Check,
   ChevronDown,
+  ClipboardList,
   Clock3,
   FileCheck2,
   FileText,
@@ -14,11 +15,14 @@ import {
   Eye,
   EyeOff,
   FileSpreadsheet,
+  Globe,
+  KeyRound,
   LayoutDashboard,
   LoaderCircle,
   Link2,
   LogOut,
   Menu,
+  Moon,
   Pause,
   Pencil,
   Play,
@@ -28,6 +32,7 @@ import {
   Search,
   SlidersHorizontal,
   ShieldCheck,
+  Sun,
   Trash2,
   Upload,
   UsersRound,
@@ -47,6 +52,29 @@ const frequencies = [
 ];
 
 const CENTRAL_TIME_ZONE = 'America/Chicago';
+
+// Tabs that don't have their own screen yet; each shows a "Coming soon" page.
+const PLACEHOLDER_TABS = [
+  { page: 'pdf', label: 'PDF', icon: FileText },
+  { page: 'asylum', label: 'Asylum', icon: Globe },
+  { page: 'forms', label: 'Forms', icon: ClipboardList },
+  { page: 'credentials', label: 'Credentials', icon: KeyRound },
+];
+
+function useTheme() {
+  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#141a17' : '#f4f6f3');
+    try { localStorage.setItem('theme', theme); } catch { /* storage unavailable; theme still applies for this visit */ }
+  }, [theme]);
+  return [theme, () => setTheme((current) => current === 'dark' ? 'light' : 'dark')];
+}
+
+function ThemeToggle({ theme, onToggle, className = 'icon-button' }) {
+  const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+  return <button className={`${className} theme-toggle`} type="button" onClick={onToggle} aria-label={label} title={label}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button>;
+}
 
 function centralDateKey(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -1232,6 +1260,7 @@ function CentralClock() {
 
 export default function App() {
   const [page, setPageState] = useState(() => pageFromPath(window.location.pathname));
+  const [theme, toggleTheme] = useTheme();
 
   // Each tab has its own address, so refresh, bookmarks and Back/Forward all work.
   const setPage = (next) => {
@@ -1413,7 +1442,9 @@ export default function App() {
     ? `Synced ${new Intl.DateTimeFormat('en-US', { timeZone: CENTRAL_TIME_ZONE, hour: 'numeric', minute: '2-digit' }).format(new Date(lastUpdated))} CT`
     : 'Waiting for data';
   const resultView = page.startsWith('results:') ? page.slice('results:'.length) : '';
-  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit' })[page]
+  const placeholderTab = PLACEHOLDER_TABS.find((tab) => tab.page === page);
+  const showAddClient = page === 'dashboard' || page === 'clients' || Boolean(resultView);
+  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit' })[page] || placeholderTab?.label
     || (resultView === 'court-dates' ? 'Court dates' : resultView.startsWith('case:') ? `${resultView.slice('case:'.length)} clients` : ({ payments: 'Payment list', 'follow-ups': 'Upcoming follow-ups', 'follow-ups-week': 'Follow-ups this week', clients: 'Client roster' })[resultView])
     || 'Overview';
   if (authStatus === 'checking') return <main className="login-screen"><img className="login-mark" src="/logo.png" alt="Loading" width="48" height="48" /></main>;
@@ -1423,11 +1454,11 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="/" onClick={(event) => { event.preventDefault(); setPage('dashboard'); }}><img className="brand-mark" src="/logo.png" alt="" width="36" height="36" /><span className="brand-name">BBeckford Law<span>ADMIN PORTAL</span></span></a>
-        <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><button className={`nav-item ${page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates') ? 'active' : ''}`} onClick={() => setPage('clients')}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button></div>
+        <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><button className={`nav-item ${page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates') ? 'active' : ''}`} onClick={() => setPage('clients')}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{PLACEHOLDER_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
       <main className="main-area">
-        <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span>/</span><b>{pageTitle}</b></div><div className="topbar-actions"><CentralClock /><span className="sync-state"><i className="sync-dot" />{updatedLabel}</span><button className={`icon-button refresh-button ${refreshing ? 'is-refreshing' : ''}`} onClick={refreshWorkbook} aria-label="Refresh client data" title="Refresh data"><RefreshCw size={17} /></button>{loginRequired && <button className="icon-button" onClick={logout} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>}{page !== 'payments' && page !== 'court-dates' && page !== 'work-permits' && <button className="button button-primary top-add" onClick={() => setIntakeOpen(true)}><Plus size={16} />Add client</button>}</div></header>
+        <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span>/</span><b>{pageTitle}</b></div><div className="topbar-actions"><CentralClock /><span className="sync-state"><i className="sync-dot" />{updatedLabel}</span><button className={`icon-button refresh-button ${refreshing ? 'is-refreshing' : ''}`} onClick={refreshWorkbook} aria-label="Refresh client data" title="Refresh data"><RefreshCw size={17} /></button><ThemeToggle theme={theme} onToggle={toggleTheme} />{loginRequired && <button className="icon-button" onClick={logout} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>}{showAddClient && <button className="button button-primary top-add" onClick={() => setIntakeOpen(true)}><Plus size={16} />Add client</button>}</div></header>
         <div className="page-content">
           {loadError && <div className="load-error" role="alert"><span>{loadError}</span><button onClick={refreshWorkbook}>Retry <RefreshCw size={14} /></button></div>}
           {page === 'dashboard'
@@ -1442,7 +1473,9 @@ export default function App() {
                 ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
                 : resultView
                   ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} view={resultView} />
-              : <ComingSoon title={page === 'payments' ? 'Payment' : 'Court Date'} icon={page === 'payments' ? CreditCard : CalendarDays} />}
+              : placeholderTab
+                ? <ComingSoon key={placeholderTab.page} title={placeholderTab.label} icon={placeholderTab.icon} />
+              : <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />}
           <footer className="page-footer"><span><i className="sync-dot" /> {dataSource} connection active</span><span>{dataSource === 'Google Sheets' ? 'Sheet checked every 20 seconds' : 'Workbook checked every 20 seconds'}</span></footer>
         </div>
       </main>
