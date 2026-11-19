@@ -1295,7 +1295,9 @@ function SchedulePage({ clients, onSelectClient, onToast }) {
   }, []);
 
   const pickedClient = clients.find((client) => client.id === form.clientId);
-  const clientCases = pickedClient ? CASE_TYPES.filter((type) => isCaseTypeSelected(pickedClient.caseType, type)) : CASE_TYPES;
+  // Every case type is offered; the picked client's own cases are listed first.
+  const clientCases = pickedClient ? CASE_TYPES.filter((type) => isCaseTypeSelected(pickedClient.caseType, type)) : [];
+  const otherCases = CASE_TYPES.filter((type) => !clientCases.includes(type));
 
   function startEdit(entry) {
     setEditing(entry ? entry.id : 'new');
@@ -1393,12 +1395,12 @@ function SchedulePage({ clients, onSelectClient, onToast }) {
       {editing && <form className="surface reminder-form" onSubmit={save}>
         <div className="form-grid">
           <label className="field">Date<input type="date" name="date" value={form.date} onChange={update} onClick={openPicker} required autoFocus /></label>
-          <label className="field">Time (Central)<input type="time" name="time" value={form.time} onChange={update} onClick={openPicker} required step={300} /></label>
+          <label className="field">Time (Central)<input type="time" name="time" value={form.time} onChange={update} onClick={openPicker} required step={60} /></label>
           <fieldset className="case-type-picker field-wide"><legend>Mode of communication</legend><div className="case-type-options">{SCHEDULE_MODES.map((mode) => <label key={mode} className={`case-type-option ${form.mode === mode ? 'selected' : ''}`}><input type="radio" name="mode" value={mode} checked={form.mode === mode} onChange={update} />{mode}</label>)}</div></fieldset>
           <label className="field field-wide">{form.mode === 'Zoom' ? 'Zoom link' : form.mode === 'In Person' ? 'Location' : 'Phone number'}<input name="location" value={form.location} onChange={update} maxLength={500} placeholder={form.mode === 'Zoom' ? 'https://zoom.us/j/…' : form.mode === 'In Person' ? 'Office, courthouse or address' : 'Number to call'} /></label>
           <label className="field field-wide">Purpose<b>*</b><input name="purpose" value={form.purpose} onChange={update} maxLength={300} required placeholder="e.g. VAWA intake consultation" /></label>
           <label className="field">Client (optional)<NameSuggest required={false} autoFocus={false} value={form.clientName} clients={clients} onChange={(name) => setForm((current) => ({ ...current, clientName: name, clientId: '', caseType: '' }))} onPick={(client) => setForm((current) => ({ ...current, clientName: client.name, clientId: client.id, caseType: '' }))} /></label>
-          <label className="field">Case (optional)<select name="caseType" value={form.caseType} onChange={update}><option value="">None</option>{clientCases.map((type) => <option key={type}>{type}</option>)}<option value="Other">Other</option></select><ChevronDown size={15} /></label>
+          <label className="field">Case (optional)<select name="caseType" value={form.caseType} onChange={update}><option value="">None</option>{clientCases.length > 0 && <optgroup label={`${pickedClient.name}'s cases`}>{clientCases.map((type) => <option key={type}>{type}</option>)}</optgroup>}<optgroup label={clientCases.length ? 'All case types' : 'Case types'}>{otherCases.map((type) => <option key={type}>{type}</option>)}<option value="Other">Other</option></optgroup></select><ChevronDown size={15} /></label>
           {form.caseType === 'Other' && <label className="field">Other reason<b>*</b><input name="caseOther" value={form.caseOther} onChange={update} maxLength={100} required autoFocus placeholder="e.g. Bond hearing, FOIA request" /></label>}
           <label className="field">Added by<select name="addedBy" value={form.addedBy} onChange={update} required><option value="" disabled>Choose…</option>{SCHEDULE_ADDED_BY.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
           {editing !== 'new' && <label className="field">Status<select name="status" value={form.status} onChange={update}>{SCHEDULE_STATUSES.map((status) => <option key={status}>{status}</option>)}</select><ChevronDown size={15} /></label>}

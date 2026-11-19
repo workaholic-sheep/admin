@@ -117,6 +117,7 @@ function idsIn(tab) {
 export function createCaseAssignments(tabs, setupMessage = '') {
   let queue = Promise.resolve();
   let cached = null;
+  let cachedAt = 0;
   const queued = (task) => {
     const operation = queue.then(task);
     queue = operation.catch(() => {});
@@ -141,6 +142,7 @@ export function createCaseAssignments(tabs, setupMessage = '') {
 
   function remember(map) {
     cached = Object.fromEntries(CASE_TYPES.map((type) => [type, detailsIn(map.get(type))]));
+    cachedAt = Date.now();
     return cached;
   }
 
@@ -207,7 +209,11 @@ export function createCaseAssignments(tabs, setupMessage = '') {
     }),
     load,
     // Last known assignments, loading them if this server instance has none yet.
-    current: async () => cached || load(),
+    // Last known assignments, re-read from the sheet only when older than maxAgeMs. Saves made through
+    // this server update the copy immediately; the age limit picks up other instances and direct sheet edits.
+    current: async (maxAgeMs = Infinity) => (cached && Date.now() - cachedAt < maxAgeMs ? cached : load()),
+    // The last successful read, even if stale, or null when nothing has been read yet.
+    lastKnown: () => cached,
 
     assign: (type, clients, add) => queued(async () => {
       if (!CASE_TYPES.includes(type)) throw new CaseSetupError(`Unknown case type "${type}".`);

@@ -191,12 +191,17 @@ async function saveCaseTypes(client, caseTypeValue) {
   }
 }
 
+// Every open browser asks for the client list every 20 seconds, and Google limits how often the app may
+// read. So case tabs are re-read at most every CASE_REFRESH_MS, and if a read fails (e.g. Google's
+// rate limit) the last good copy is used instead of showing every client with no cases.
+const CASE_REFRESH_MS = 15 * 1000;
 async function caseAssignments(fresh = false) {
   try {
-    return { assignments: fresh ? await cases.load() : await cases.current(), caseError: '' };
+    return { assignments: await cases.current(fresh ? CASE_REFRESH_MS : Infinity), caseError: '' };
   } catch (error) {
     console.error(error);
-    return { assignments: null, caseError: error.message };
+    const lastKnown = cases.lastKnown();
+    return { assignments: lastKnown, caseError: lastKnown ? '' : error.message };
   }
 }
 
