@@ -7,6 +7,7 @@ import {
   CalendarDays,
   Check,
   ChevronDown,
+  ChevronRight,
   ClipboardList,
   Clock3,
   Copy,
@@ -17,6 +18,7 @@ import {
   EyeOff,
   FileSpreadsheet,
   Globe,
+  GripVertical,
   KeyRound,
   LayoutDashboard,
   LoaderCircle,
@@ -453,7 +455,7 @@ function ClientForm({ onClose, onCreated }) {
           <DocumentScanner onScanned={fillFromScan} />
           <div className="form-section-title"><span>01</span><h3>Client details</h3></div>
           <div className="form-grid">
-            <label className="field field-wide">Client name <b>*</b><input autoFocus className={scanned('name')} name="name" value={form.name} onChange={update} required maxLength={120} placeholder="Full name" /></label>
+            <label className="field field-wide"><span>Client name <b>*</b></span><input autoFocus className={scanned('name')} name="name" value={form.name} onChange={update} required maxLength={120} placeholder="Full name" /></label>
             <label className="field">Email<input className={scanned('email')} name="email" type="email" value={form.email} onChange={update} maxLength={180} placeholder="name@example.com" /></label>
             <label className="field">Phone<input className={scanned('phone')} name="phone" value={form.phone} onChange={update} maxLength={40} placeholder="Phone number" /></label>
             <PersonalFields form={form} onChange={update} scanned={scanned} />
@@ -501,6 +503,12 @@ function editValues(client) {
     gender: client.gender || '',
     address: client.address || '',
   };
+}
+
+// The client's fields exactly as stored, for saves that change one thing (e.g. case type).
+// Unlike editValues, blanks stay blank instead of picking up form defaults.
+function unchangedFields(client) {
+  return { ...editValues(client), frequency: client.frequency || '', translator: client.translator || '', paymentStatus: client.paymentStatus || '' };
 }
 
 function ClientDetails({ client, courtDates, onClose, onUpdate }) {
@@ -1311,10 +1319,10 @@ function CredentialsPage({ onToast }) {
       <div className="welcome-row roster-heading"><div><span className="eyebrow">CREDENTIALS · {records.length} SAVED</span><h1>Password manager</h1><p className="page-subtitle">Shared website logins for staff. Passwords are encrypted and only shown when you ask.</p></div><button className="button button-primary" onClick={() => startEdit(null)} disabled={loadState !== 'ready'}><Plus size={16} />Add website</button></div>
       {editing && <form className="surface reminder-form" onSubmit={save} autoComplete="off">
         <div className="form-grid">
-          <label className="field">Website name<b>*</b><input name="website" value={form.website} onChange={update} maxLength={100} placeholder="e.g. USCIS online account" required autoFocus /></label>
+          <label className="field"><span>Website name <b>*</b></span><input name="website" value={form.website} onChange={update} maxLength={100} placeholder="e.g. USCIS online account" required autoFocus /></label>
           <label className="field">Website address<input name="url" value={form.url} onChange={update} maxLength={300} placeholder="e.g. myaccount.uscis.gov" inputMode="url" /></label>
           <label className="field">Username or email<input name="username" value={form.username} onChange={update} maxLength={200} autoComplete="off" /></label>
-          <label className="field">Password{editing === 'new' && <b>*</b>}
+          <label className="field"><span>Password{editing === 'new' && <> <b>*</b></>}</span>
             <span className="password-input credential-password-input">
               <input name="password" type={showFormPassword ? 'text' : 'password'} value={form.password} onChange={update} maxLength={500} autoComplete="new-password" required={editing === 'new'} placeholder={editing === 'new' ? '' : 'Leave blank to keep the current password'} />
               <button className="password-toggle" type="button" onClick={() => setShowFormPassword((shown) => !shown)} aria-label={showFormPassword ? 'Hide password' : 'Show password'} aria-pressed={showFormPassword} title={showFormPassword ? 'Hide password' : 'Show password'}>{showFormPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
@@ -1351,7 +1359,39 @@ function CredentialsPage({ onToast }) {
   );
 }
 
-function ClientList({ clients, search, onSearch, onSelectClient, view = 'clients' }) {
+// Drag-and-drop of client rows onto case types in the sidebar.
+const CLIENT_DRAG_TYPE = 'application/x-client-ids';
+
+function clientIdsFromDrag(event) {
+  try {
+    const ids = JSON.parse(event.dataTransfer.getData(CLIENT_DRAG_TYPE) || '[]');
+    return Array.isArray(ids) ? ids.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+const isClientDrag = (event) => Array.from(event.dataTransfer?.types || []).includes(CLIENT_DRAG_TYPE);
+
+// A small "3 clients" label follows the pointer instead of a picture of the whole table row.
+function setDragLabel(event, text) {
+  const ghost = document.createElement('div');
+  ghost.className = 'drag-ghost';
+  ghost.textContent = text;
+  document.body.appendChild(ghost);
+  event.dataTransfer.setDragImage(ghost, 14, 14);
+  window.setTimeout(() => ghost.remove(), 0);
+}
+
+function CaseTypePills({ value }) {
+  const types = CASE_TYPES.filter((type) => isCaseTypeSelected(value, type));
+  if (!types.length) return <span className="muted">None</span>;
+  return <span className="case-pills">{types.map((type) => <span key={type} className="case-pill">{type}</span>)}</span>;
+}
+
+function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, view = 'clients' }) {
+  const [selected, setSelected] = useState(() => new Set());
+  const [assigning, setAssigning] = useState(false);
   const [frequency, setFrequency] = useState('All frequencies');
   const [payment, setPayment] = useState('All payment statuses');
   const [sortOrder, setSortOrder] = useState('name');
@@ -1385,9 +1425,47 @@ function ClientList({ clients, search, onSearch, onSelectClient, view = 'clients
     return left.name.localeCompare(right.name);
   });
 
+  const selectable = visibleClients.filter((client) => client.id);
+  const allSelected = selectable.length > 0 && selectable.every((client) => selected.has(client.id));
+  const toggleOne = (id) => setSelected((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(selectable.map((client) => client.id)));
+
+  async function assign(ids, type, add) {
+    if (!type || !ids.length) return;
+    setAssigning(true);
+    try {
+      const ok = await onAssignCaseType(ids, type, add);
+      if (ok) setSelected(new Set());
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  function startDrag(event, client) {
+    // Dragging a ticked row carries every ticked client; otherwise just this one.
+    const ids = selected.has(client.id) ? [...selected] : [client.id];
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData(CLIENT_DRAG_TYPE, JSON.stringify(ids));
+    event.dataTransfer.setData('text/plain', ids.length === 1 ? client.name : `${ids.length} clients`);
+    setDragLabel(event, ids.length === 1 ? client.name : `${ids.length} clients`);
+  }
+
   return (
     <>
       <div className="welcome-row roster-heading"><div><span className="eyebrow">MASTERDATA · {clients.length} RECORDS</span><h1>{title}</h1><p className="page-subtitle">{visibleClients.length} clients shown</p></div></div>
+      {selected.size > 0
+        ? <div className="selection-bar surface" role="region" aria-label="Selected clients">
+          <strong>{selected.size} selected</strong>
+          <FilterMenu label="Add selected clients to a case type" value="" onChange={(type) => assign([...selected], type, true)} icon={Plus} options={[{ value: '', label: assigning ? 'Saving…' : 'Add to…' }, ...CASE_TYPES.map((type) => ({ value: type, label: type }))]} />
+          {caseType && <button className="button button-secondary button-remove" type="button" disabled={assigning} onClick={() => assign([...selected], caseType, false)}><X size={14} />Remove from {caseType}</button>}
+          <button className="text-button" type="button" onClick={() => setSelected(new Set())}>Clear selection</button>
+          <span className="selection-hint">or drag them onto a case type in the sidebar</span>
+        </div>
+        : <p className="drag-hint"><GripVertical size={14} />Tip: drag a client onto a case type in the sidebar, or tick several and drag them together.</p>}
       <section className="surface roster-surface">
         <div className="roster-toolbar">
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, email or ID" aria-label="Search clients" />{search && <button className="clear-search" onClick={() => onSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
@@ -1395,9 +1473,9 @@ function ClientList({ clients, search, onSearch, onSelectClient, view = 'clients
           <FilterMenu label="Payment status" value={payment} onChange={setPayment} icon={CreditCard} options={[{ value: 'All payment statuses', label: 'All payment statuses' }, { value: 'Pending', label: 'Pending' }, { value: 'Up to Date', label: 'Up to Date' }]} />
           <FilterMenu label="Sort clients" value={sortOrder} onChange={setSortOrder} icon={ArrowDownAZ} options={[{ value: 'name', label: 'Name A-Z' }, { value: 'clientId', label: 'CL number' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table"><thead><tr><th>Client</th><th>Meeting frequency</th><th>Next contact</th><th>Payment</th><th aria-label="Open client" /></tr></thead><tbody>
-          {visibleClients.map((client) => <tr key={client.id || client.email} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && onSelectClient(client)}><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td><td>{client.frequency || <span className="muted">Not set</span>}</td><td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td><td><Status value={client.paymentStatus} /></td><td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
-          {!visibleClients.length && <tr><td colSpan="5"><div className="table-empty"><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></div></td></tr>}
+        <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th><th>Case type</th><th>Meeting frequency</th><th>Next contact</th><th>Payment</th><th aria-label="Open client" /></tr></thead><tbody>
+          {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td><td><CaseTypePills value={client.caseType} /></td><td>{client.frequency || <span className="muted">Not set</span>}</td><td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td><td><Status value={client.paymentStatus} /></td><td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
+          {!visibleClients.length && <tr><td colSpan="7"><div className="table-empty"><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visibleClients.length} of {clients.length}</span><span><i className="sync-dot" /> Synced from MasterData</span></div>
       </section>
@@ -1465,6 +1543,20 @@ function CentralClock() {
 export default function App() {
   const [page, setPageState] = useState(() => pageFromPath(window.location.pathname));
   const [theme, toggleTheme] = useTheme();
+  const [clientsOpen, setClientsOpen] = useState(() => {
+    try { return localStorage.getItem('nav-clients-open') !== 'false'; } catch { return true; }
+  });
+  const [dropTarget, setDropTarget] = useState('');
+  useEffect(() => {
+    try { localStorage.setItem('nav-clients-open', String(clientsOpen)); } catch { /* remembered for this visit only */ }
+  }, [clientsOpen]);
+  useEffect(() => {
+    // A drag cancelled or dropped elsewhere still clears the sidebar highlight.
+    const clear = () => setDropTarget('');
+    window.addEventListener('dragend', clear);
+    window.addEventListener('drop', clear);
+    return () => { window.removeEventListener('dragend', clear); window.removeEventListener('drop', clear); };
+  }, []);
 
   // Each tab has its own address, so refresh, bookmarks and Back/Forward all work.
   const setPage = (next) => {
@@ -1622,6 +1714,50 @@ export default function App() {
     return result.client;
   }
 
+  // Adds or removes one case type for several clients. The table updates at once;
+  // any client the sheet refuses is put back and the error is shown.
+  async function assignCaseType(ids, caseType, add) {
+    const changing = clients.filter((client) => ids.includes(client.id) && isCaseTypeSelected(client.caseType, caseType) !== add);
+    if (!changing.length) {
+      setToast(ids.length === 1 ? `Already ${add ? 'in' : 'not in'} ${caseType}` : `All ${ids.length} are already ${add ? 'in' : 'out of'} ${caseType}`);
+      return true;
+    }
+    const nextValue = new Map(changing.map((client) => [client.id, updateCaseTypeValue(client.caseType, caseType, add)]));
+    setClients((current) => current.map((client) => nextValue.has(client.id) ? { ...client, caseType: nextValue.get(client.id) } : client));
+    const failed = [];
+    const saved = [];
+    for (const client of changing) {
+      try {
+        const response = await fetch(`/api/clients/${encodeURIComponent(client.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...unchangedFields(client), caseType: nextValue.get(client.id) }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not update this client.');
+        setClients((current) => current.map((item) => item.id === client.id ? result.client : item));
+        setLastUpdated(result.modifiedAt);
+        saved.push(client.name);
+      } catch (error) {
+        failed.push(`${client.name}: ${error.message}`);
+        setClients((current) => current.map((item) => item.id === client.id ? { ...item, caseType: client.caseType } : item));
+      }
+    }
+    if (saved.length) {
+      const who = saved.length === 1 ? saved[0] : `${saved.length} clients`;
+      setToast(add ? `Added ${who} to ${caseType}` : `Removed ${who} from ${caseType}`);
+    }
+    if (failed.length) setLoadError(`Could not update ${failed.length === 1 ? 'a client' : `${failed.length} clients`}. ${failed.join(' · ')}`);
+    return !failed.length;
+  }
+
+  function dropOnCaseType(event, caseType) {
+    event.preventDefault();
+    setDropTarget('');
+    const ids = clientIdsFromDrag(event);
+    if (ids.length) assignCaseType(ids, caseType, true);
+  }
+
   function createdClient(result) {
     setClients((current) => [...current, result.client].sort((left, right) => left.name.localeCompare(right.name)));
     setLastUpdated(result.modifiedAt);
@@ -1646,6 +1782,8 @@ export default function App() {
     ? `Synced ${new Intl.DateTimeFormat('en-US', { timeZone: CENTRAL_TIME_ZONE, hour: 'numeric', minute: '2-digit' }).format(new Date(lastUpdated))} CT`
     : 'Waiting for data';
   const resultView = page.startsWith('results:') ? page.slice('results:'.length) : '';
+  const caseCounts = countCaseTypes(clients);
+  const inClientsSection = page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates');
   const extraTab = EXTRA_TABS.find((tab) => tab.page === page);
   const showAddClient = page === 'dashboard' || page === 'clients' || Boolean(resultView);
   const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit' })[page] || extraTab?.label
@@ -1658,7 +1796,24 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="/" onClick={(event) => { event.preventDefault(); setPage('dashboard'); }}><img className="brand-mark" src="/logo.png" alt="" width="36" height="36" /><span className="brand-name">BBeckford Law<span>ADMIN PORTAL</span></span></a>
-        <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><button className={`nav-item ${page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates') ? 'active' : ''}`} onClick={() => setPage('clients')}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
+        <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><div className="nav-group">
+          <div className="nav-group-head">
+            <button className={`nav-item ${inClientsSection && !clientsOpen ? 'active' : ''} ${inClientsSection ? 'is-current' : ''}`} onClick={() => { setPage('clients'); setClientsOpen(true); }} onDragOver={(event) => { if (isClientDrag(event)) setClientsOpen(true); }}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button>
+            <button className="nav-toggle" type="button" onClick={() => setClientsOpen((open) => !open)} aria-expanded={clientsOpen} aria-controls="nav-client-types" aria-label={clientsOpen ? 'Collapse client case types' : 'Expand client case types'} title={clientsOpen ? 'Collapse' : 'Expand'}>{clientsOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>
+          </div>
+          {clientsOpen && <div className="nav-children" id="nav-client-types">
+            <button className={`nav-child ${page === 'clients' ? 'active' : ''}`} onClick={() => setPage('clients')}><span>All Clients</span><span className="nav-count">{clients.length}</span></button>
+            {CASE_TYPES.map((type) => <button
+              key={type}
+              className={`nav-child ${page === `results:case:${type}` ? 'active' : ''} ${dropTarget === type ? 'is-drop-target' : ''}`}
+              onClick={() => { setSearch(''); setPage(`results:case:${type}`); }}
+              onDragOver={(event) => { if (!isClientDrag(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; if (dropTarget !== type) setDropTarget(type); }}
+              onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropTarget((current) => current === type ? '' : current); }}
+              onDrop={(event) => dropOnCaseType(event, type)}
+              title={`Show ${type} clients, or drop clients here to add them to ${type}`}
+            ><span>{type}</span><span className="nav-count">{caseCounts[type]}</span></button>)}
+          </div>}
+        </div><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
       <main className="main-area">
@@ -1668,7 +1823,7 @@ export default function App() {
           {page === 'dashboard'
             ? <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />
             : page === 'clients'
-              ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} />
+              ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} />
               : page === 'work-permits'
                 ? <WorkPermitList clients={clients} onToast={setToast} />
               : page === 'payments'
@@ -1676,7 +1831,7 @@ export default function App() {
               : page === 'court-dates' || resultView === 'court-dates'
                 ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
                 : resultView
-                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} view={resultView} />
+                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} view={resultView} />
               : page === 'credentials'
                 ? <CredentialsPage onToast={setToast} />
               : extraTab

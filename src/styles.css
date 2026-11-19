@@ -760,3 +760,52 @@ body { font-size: var(--type-body); }
 [data-theme="dark"] .credential-value code { background: var(--d-raised); color: var(--d-text-3); }
 [data-theme="dark"] .credential-value code.is-shown { color: var(--d-text); }
 [data-theme="dark"] .table-foot > span:last-child svg { color: var(--d-accent); }
+
+/* Clients group in the sidebar: expandable case types that also accept dropped clients. */
+.nav-group { display: grid; gap: 2px; }
+.nav-group-head { display: flex; align-items: center; gap: 2px; }
+.nav-group-head .nav-item { flex: 1; min-width: 0; }
+.nav-item.is-current { color: var(--forest-dark); font-weight: 700; }
+.nav-toggle { display: grid; width: 28px; height: 32px; flex: none; place-items: center; border: 0; border-radius: 5px; background: transparent; color: #819087; cursor: pointer; }
+.nav-toggle:hover { background: #f5f7f4; color: var(--ink); }
+.nav-children { display: grid; gap: 1px; margin: 0 0 4px 20px; padding-left: 10px; border-left: 1px solid var(--line); }
+.nav-child { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 10px; border: 1px dashed transparent; border-radius: 5px; background: transparent; color: #68776d; font-size: var(--type-small); text-align: left; cursor: pointer; transition: background .14s ease, border-color .14s ease, color .14s ease; }
+.nav-child > span:first-child { flex: 1; }
+.nav-child:hover { background: #f5f7f4; color: var(--ink); }
+.nav-child.active { background: #e9f0ea; color: var(--forest-dark); font-weight: 700; }
+.nav-child.is-drop-target { border-color: var(--forest); background: #dfeee2; color: var(--forest-dark); font-weight: 700; transform: translateX(2px); }
+.drag-ghost { position: fixed; top: -100px; left: -100px; padding: 6px 11px; border-radius: 14px; background: var(--forest); color: #fff; font: 600 12px 'DM Sans', sans-serif; white-space: nowrap; pointer-events: none; }
+
+/* Client table: selection, drag handle, case-type pills */
+.client-roster-table .select-cell { width: 54px; padding-right: 0; white-space: nowrap; }
+.client-roster-table .select-cell input { width: 15px; height: 15px; margin: 0; vertical-align: middle; accent-color: var(--forest); cursor: pointer; }
+.drag-grip { margin: 0 4px 0 -6px; vertical-align: middle; color: #b3bdb5; cursor: grab; }
+.client-roster-table tbody tr[draggable="true"]:hover .drag-grip { color: var(--forest); }
+.client-roster-table tbody tr.is-selected { background: #f1f7f1; }
+.case-pills { display: inline-flex; flex-wrap: wrap; gap: 4px; max-width: 200px; }
+.case-pill { padding: 2px 7px; border-radius: 10px; background: #edf3ee; color: #4d6f57; font-size: var(--type-caption); font-weight: 600; }
+.drag-hint { display: flex; align-items: center; gap: 6px; margin: -8px 0 12px; color: #8a968e; font-size: var(--type-small); }
+.selection-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; padding: 10px 14px; border-color: #b7cdb9; background: #f3f8f3; animation: appear .18s ease both; }
+.selection-bar strong { color: var(--forest-dark); font-size: var(--type-label); }
+.selection-bar .filter-control { background: #fff; }
+.selection-bar .button { min-height: 35px; }
+.selection-hint { color: #8a968e; font-size: var(--type-caption); }
+@media (max-width: 760px) {
+  .nav-group, .nav-group-head { display: contents; }
+  .nav-toggle, .nav-children { display: none; }
+  .drag-hint, .selection-hint, .drag-grip { display: none; }
+}
+
+[data-theme="dark"] .nav-item.is-current { color: var(--d-accent); }
+[data-theme="dark"] .nav-toggle { color: var(--d-text-3); }
+[data-theme="dark"] .nav-toggle:hover, [data-theme="dark"] .nav-child:hover { background: var(--d-hover); color: var(--d-text); }
+[data-theme="dark"] .nav-child { color: var(--d-text-2); }
+[data-theme="dark"] .nav-child.active { background: var(--d-accent-bg); color: var(--d-accent); }
+[data-theme="dark"] .nav-child.is-drop-target { background: #2a4535; border-color: var(--d-accent); color: var(--d-text); }
+[data-theme="dark"] .drag-grip { color: #55635b; }
+[data-theme="dark"] .client-roster-table tbody tr.is-selected { background: #1f2d26; }
+[data-theme="dark"] .case-pill { background: var(--d-accent-bg); color: var(--d-accent); }
+[data-theme="dark"] .drag-hint, [data-theme="dark"] .selection-hint { color: var(--d-text-3); }
+[data-theme="dark"] .selection-bar { background: #1b2a22; border-color: #3d6550; }
+[data-theme="dark"] .selection-bar strong { color: var(--d-accent); }
+[data-theme="dark"] .selection-bar .filter-control { background: var(--d-raised); }
