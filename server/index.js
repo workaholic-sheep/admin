@@ -8,6 +8,9 @@ import { createSessionAuth } from './session-auth.js';
 import { createReminderWorkbookStore } from './payment-reminders.js';
 import { CredentialError, createCredentialService, createCredentialWorkbookStore, credentialInput, credentialKeyFor } from './credentials.js';
 import { createWorkbookStore } from './workbook.js';
+import { CaseSetupError, createCaseAssignments } from './case-assignments.js';
+import { createGoogleTabs, createWorkbookTabs } from './sheet-tabs.js';
+import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
 import {
   DECISIONS, WorkPermitError, createWorkPermitWorkbookStore, formatANumber, workPermitStatus, isTrackingToken, newTrackingToken, pauseClock, resumeClock,
 } from './work-permits.js';
@@ -17,7 +20,8 @@ const workbookPath = resolve(process.env.WORKBOOK_PATH || resolve(root, "Prototy
 const courtWorkbookPath = resolve(process.env.COURT_WORKBOOK_PATH || resolve(root, 'Prototype of Reports.xlsx'));
 const workPermitWorkbookPath = resolve(process.env.WORK_PERMIT_WORKBOOK_PATH || resolve(root, 'BBeckford_WorkPermit_Database.xlsx'));
 const reminderWorkbookPath = resolve(process.env.PAYMENT_REMINDER_WORKBOOK_PATH || resolve(root, 'BBeckford_PaymentReminders.xlsx'));
-const credentialWorkbookPath = resolve(process.env.CREDENTIALS_WORKBOOK_PATH || resolve(root, 'BBeckford_Credentials.xlsx'));
+const caseWorkbookPath = resolve(process.env.CASES_WORKBOOK_PATH || resolve(root, 'BBeckford_Clients_Additional_Info.xlsx'));
+const credentialWorkbookPath =resolve(process.env.CREDENTIALS_WORKBOOK_PATH || resolve(root, 'BBeckford_Credentials.xlsx'));
 const port = Number(process.env.PORT || 3001);
 const production = process.env.NODE_ENV === 'production';
 const useGoogleSheets = process.env.DATA_SOURCE === 'google-sheets' || Boolean(process.env.GOOGLE_SHEET_ID);
@@ -49,6 +53,20 @@ const store = useGoogleSheets
   : createWorkbookStore(workbookPath, courtWorkbookPath);
 const workPermitStore = useGoogleSheets ? store.workPermits : createWorkPermitWorkbookStore(workPermitWorkbookPath);
 const reminderStore = useGoogleSheets ? store.reminders : createReminderWorkbookStore(reminderWorkbookPath);
+// Case types and Client_Info live in the separate Clients_Additional_Info spreadsheet.
+// If it isn't configured, client lists still load; only case-type features report the setup step.
+const casesSheetId = spreadsheetIdFrom(process.env.GOOGLE_CASES_SHEET_ID);
+let caseSetupMessage = `Case types are saved in the Clients_Additional_Info spreadsheet, which isn't connected yet. Set GOOGLE_CASES_SHEET_ID to its ID and share it with ${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'the service account'} as Editor.`;
+let caseTabs = null;
+try {
+  if (!useGoogleSheets) caseTabs = createWorkbookTabs(caseWorkbookPath);
+  else if (casesSheetId) caseTabs = createGoogleTabs({ spreadsheetId: casesSheetId, serviceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, privateKey: process.env.GOOGLE_PRIVATE_KEY, envName: 'GOOGLE_CASES_SHEET_ID', label: 'Clients_Additional_Info' });
+} catch (error) {
+  caseSetupMessage = error.message;
+}
+const cases = createCaseAssignments(caseTabs, caseSetupMessage);
+const SYNC_EVERY_MS = 60 * 1000;
+let lastSync = 0;
 // Without CREDENTIALS_KEY in production the rest of the app still runs; only the password manager reports that it needs setup.
 const credentials = createCredentialService(
   useGoogleSheets ? store.credentials : createCredentialWorkbookStore(credentialWorkbookPath),
@@ -129,7 +147,7 @@ app.post('/api/clients/:clientId/follow-up/done', async (request, response, next
   try {
     const client = await store.completeFollowUp(request.params.clientId);
     const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workbookPath)).mtime.toISOString();
-    response.json({ client, modifiedAt, source: sourceName });
+    response.json({ client: withCaseTypes(client, (await caseAssignments()).assignments), modifiedAt, source: sourceName });
   } catch (error) {
     if (error.message === 'Client not found.') return response.status(404).json({ error: error.message });
     if (error.message.includes('scheduled follow-up') || error.message.includes('already marked done')) {
@@ -139,12 +157,78 @@ app.post('/api/clients/:clientId/follow-up/done', async (request, response, next
   }
 });
 
+// A client's case types come from the case tabs, shown as "VAWA + I-485" like the old CaseType value.
+function withCaseTypes(client, assignments) {
+  return { ...client, caseType: assignments ? CASE_TYPES.filter((type) => assignments[type]?.has(client.id)).join(' + ') : '' };
+}
+
+// After an intake or edit: case-type checkboxes go to the case tabs (not MasterData), and the
+// next client-list load copies the change into Client_Info. The client itself is already saved,
+// so a case-tab failure is returned as a message rather than failing the request.
+async function saveCaseTypes(client, caseTypeValue) {
+  lastSync = 0;
+  if (!cases.configured && !CASE_TYPES.some((type) => isCaseTypeSelected(caseTypeValue, type))) return { client: withCaseTypes(client, null), caseError: '' };
+  try {
+    const assignments = await cases.setForClient(client, String(caseTypeValue || ''));
+    return { client: withCaseTypes(client, assignments), caseError: '' };
+  } catch (error) {
+    console.error(error);
+    const { assignments } = await caseAssignments();
+    return { client: withCaseTypes(client, assignments), caseError: `Saved, but case types could not be updated: ${error.message}` };
+  }
+}
+
+async function caseAssignments(fresh = false) {
+  try {
+    return { assignments: fresh ? await cases.load() : await cases.current(), caseError: '' };
+  } catch (error) {
+    console.error(error);
+    return { assignments: null, caseError: error.message };
+  }
+}
+
+// Copies MasterData into Client_Info at most once a minute per server instance (and right after
+// edits made in the app). Failures are reported but never block the client list.
+async function syncClientInfo(clients, force = false) {
+  if (!cases.configured || (!force && Date.now() - lastSync < SYNC_EVERY_MS)) return '';
+  lastSync = Date.now();
+  try {
+    await cases.sync(clients.map((client) => ({ ...client, legacyCaseType: client.caseType })));
+    return '';
+  } catch (error) {
+    console.error(error);
+    lastSync = 0;
+    return `Client_Info could not be updated: ${error.message}`;
+  }
+}
+
 app.get('/api/clients', async (_request, response, next) => {
   try {
     const clients = await store.list();
+    const syncError = await syncClientInfo(clients);
+    const { assignments, caseError } = await caseAssignments(true);
     const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workbookPath)).mtime.toISOString();
-    response.json({ clients, modifiedAt, source: sourceName });
+    response.json({ clients: clients.map((client) => withCaseTypes(client, assignments)), caseError: caseError || syncError, modifiedAt, source: sourceName });
   } catch (error) {
+    next(error);
+  }
+});
+
+// Drag and drop: add or remove many clients from one case type, touching only that case tab.
+app.post('/api/case-assignments', async (request, response, next) => {
+  const caseType = String(request.body?.caseType || '');
+  const add = request.body?.add !== false;
+  const ids = Array.isArray(request.body?.clientIds) ? [...new Set(request.body.clientIds.map(String))].slice(0, 500) : [];
+  if (!CASE_TYPES.includes(caseType)) return response.status(400).json({ error: 'Choose a valid case type.' });
+  if (!ids.length) return response.status(400).json({ error: 'Choose at least one client.' });
+  try {
+    const clients = (await store.list()).filter((client) => ids.includes(client.id));
+    if (!clients.length) return response.status(404).json({ error: 'Those clients were not found in MasterData.' });
+    const changed = await cases.assign(caseType, clients, add);
+    const { assignments } = await caseAssignments();
+    response.json({ changed, clients: clients.map((client) => withCaseTypes(client, assignments)) });
+  } catch (error) {
+    if (error instanceof CaseSetupError) return response.status(503).json({ error: error.message });
     next(error);
   }
 });
@@ -407,7 +491,8 @@ app.post('/api/clients', async (request, response, next) => {
       address: String(input.address || '').trim(),
     });
     const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workbookPath)).mtime.toISOString();
-    response.status(201).json({ client, modifiedAt, source: sourceName });
+    const { client: saved, caseError } = await saveCaseTypes(client, input.caseType);
+    response.status(201).json({ client: saved, caseError, modifiedAt, source: sourceName });
   } catch (error) {
     if (error.message.includes('already exists')) return response.status(409).json({ error: error.message });
     if (error.message.includes('locked by Excel')) return response.status(423).json({ error: error.message });
@@ -462,7 +547,8 @@ app.put('/api/clients/:clientId', async (request, response, next) => {
       address: String(input.address || '').trim(),
     });
     const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workbookPath)).mtime.toISOString();
-    response.json({ client, modifiedAt, source: sourceName });
+    const { client: saved, caseError } = await saveCaseTypes(client, input.caseType);
+    response.json({ client: saved, caseError, modifiedAt, source: sourceName });
   } catch (error) {
     if (error.message === 'Client not found.') return response.status(404).json({ error: error.message });
     if (error.message.includes('already exists')) return response.status(409).json({ error: error.message });

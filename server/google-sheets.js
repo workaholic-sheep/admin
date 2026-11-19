@@ -32,10 +32,10 @@ export function spreadsheetIdFrom(value) {
   return text.match(/\/spreadsheets\/d\/([A-Za-z0-9_-]+)/)?.[1] || text;
 }
 
-const looksLikeSpreadsheetId = (value) => /^[A-Za-z0-9_-]{25,}$/.test(String(value || ''));
+export const looksLikeSpreadsheetId = (value) => /^[A-Za-z0-9_-]{25,}$/.test(String(value || ''));
 
 // Turns Google API failures into messages that say what to fix in the spreadsheet.
-function explainGoogleError(error, { label, envName, serviceAccountEmail, write = false }) {
+export function explainGoogleError(error, { label, envName, serviceAccountEmail, write = false }) {
   if (error instanceof SheetSetupError || error instanceof WorkPermitError) return error;
   const status = Number(error?.code || error?.response?.status || 0);
   const detail = String(error?.message || '');
@@ -304,7 +304,6 @@ export function createGoogleSheetStore({
     put('Translator Needed', input.translator || 'No');
     putFormula('Date Onboarded', dateFormula(input.onboardingDate) || '=TODAY()');
     put('Meeting Frequency', input.frequency || '');
-    put('CaseType', input.caseType || '');
     putFormula('Date of Interview', dateFormula(input.interviewDate));
     putFormula('Date Contacted', dateFormula(input.lastContactDate));
     put('Outcome', input.outcome || '');
@@ -414,7 +413,6 @@ export function createGoogleSheetStore({
     put('Translator Needed', input.translator);
     putDate('Date Onboarded', input.onboardingDate);
     put('Meeting Frequency', input.frequency);
-    put('CaseType', input.caseType);
     putDate('Date of Interview', input.interviewDate);
     putDate('Date Contacted', input.lastContactDate);
     put('Outcome ', input.outcome);

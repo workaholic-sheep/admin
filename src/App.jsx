@@ -505,12 +505,6 @@ function editValues(client) {
   };
 }
 
-// The client's fields exactly as stored, for saves that change one thing (e.g. case type).
-// Unlike editValues, blanks stay blank instead of picking up form defaults.
-function unchangedFields(client) {
-  return { ...editValues(client), frequency: client.frequency || '', translator: client.translator || '', paymentStatus: client.paymentStatus || '' };
-}
-
 function ClientDetails({ client, courtDates, onClose, onUpdate }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1579,6 +1573,7 @@ export default function App() {
   const [selectedClient, setSelectedClient] = useState(null);
   const [intakeOpen, setIntakeOpen] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [caseError, setCaseError] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [dataSource, setDataSource] = useState('Excel');
   const [refreshing, setRefreshing] = useState(false);
@@ -1631,6 +1626,7 @@ export default function App() {
         if (!response.ok) throw new Error(result.error || 'Could not load the client data.');
         if (active) {
           setClients(result.clients);
+          setCaseError(result.caseError || '');
           setLastUpdated(result.modifiedAt);
           setDataSource(result.source || 'Excel');
           setLoadError('');
@@ -1672,6 +1668,7 @@ export default function App() {
         setCourtDatesError(courtResult.error || 'Could not load court dates.');
       }
       setClients(result.clients);
+      setCaseError(result.caseError || '');
       setLastUpdated(result.modifiedAt);
       setDataSource(result.source || 'Excel');
       setLoadError('');
@@ -1711,11 +1708,12 @@ export default function App() {
     setLastUpdated(result.modifiedAt);
     setDataSource(result.source || dataSource);
     setToast(`${result.client.name} updated`);
+    if (result.caseError) setCaseError(result.caseError);
     return result.client;
   }
 
-  // Adds or removes one case type for several clients. The table updates at once;
-  // any client the sheet refuses is put back and the error is shown.
+  // Adds or removes one case type for several clients. The table updates at once and is
+  // put back if the Clients_Additional_Info spreadsheet can't be updated.
   async function assignCaseType(ids, caseType, add) {
     const changing = clients.filter((client) => ids.includes(client.id) && isCaseTypeSelected(client.caseType, caseType) !== add);
     if (!changing.length) {
@@ -1724,31 +1722,26 @@ export default function App() {
     }
     const nextValue = new Map(changing.map((client) => [client.id, updateCaseTypeValue(client.caseType, caseType, add)]));
     setClients((current) => current.map((client) => nextValue.has(client.id) ? { ...client, caseType: nextValue.get(client.id) } : client));
-    const failed = [];
-    const saved = [];
-    for (const client of changing) {
-      try {
-        const response = await fetch(`/api/clients/${encodeURIComponent(client.id)}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...unchangedFields(client), caseType: nextValue.get(client.id) }),
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Could not update this client.');
-        setClients((current) => current.map((item) => item.id === client.id ? result.client : item));
-        setLastUpdated(result.modifiedAt);
-        saved.push(client.name);
-      } catch (error) {
-        failed.push(`${client.name}: ${error.message}`);
-        setClients((current) => current.map((item) => item.id === client.id ? { ...item, caseType: client.caseType } : item));
-      }
-    }
-    if (saved.length) {
-      const who = saved.length === 1 ? saved[0] : `${saved.length} clients`;
+    // One request for the whole drop; it only touches the case tab in Clients_Additional_Info.
+    try {
+      const response = await fetch('/api/case-assignments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseType, add, clientIds: changing.map((client) => client.id) }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not update case types.');
+      const confirmed = new Map(result.clients.map((client) => [client.id, client.caseType]));
+      setClients((current) => current.map((client) => confirmed.has(client.id) ? { ...client, caseType: confirmed.get(client.id) } : client));
+      const who = changing.length === 1 ? changing[0].name : `${changing.length} clients`;
       setToast(add ? `Added ${who} to ${caseType}` : `Removed ${who} from ${caseType}`);
+      return true;
+    } catch (error) {
+      const original = new Map(changing.map((client) => [client.id, client.caseType]));
+      setClients((current) => current.map((client) => original.has(client.id) ? { ...client, caseType: original.get(client.id) } : client));
+      setCaseError(error.message);
+      return false;
     }
-    if (failed.length) setLoadError(`Could not update ${failed.length === 1 ? 'a client' : `${failed.length} clients`}. ${failed.join(' · ')}`);
-    return !failed.length;
   }
 
   function dropOnCaseType(event, caseType) {
@@ -1766,6 +1759,7 @@ export default function App() {
     setPage('clients');
     setSearch(result.client.name);
     setToast(`Submitted: ${result.client.name}`);
+    if (result.caseError) setCaseError(result.caseError);
   }
 
   function showMetricResults(view) {
@@ -1820,6 +1814,7 @@ export default function App() {
         <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span>/</span><b>{pageTitle}</b></div><div className="topbar-actions"><CentralClock /><span className="sync-state"><i className="sync-dot" />{updatedLabel}</span><button className={`icon-button refresh-button ${refreshing ? 'is-refreshing' : ''}`} onClick={refreshWorkbook} aria-label="Refresh client data" title="Refresh data"><RefreshCw size={17} /></button><ThemeToggle theme={theme} onToggle={toggleTheme} />{loginRequired && <button className="icon-button" onClick={logout} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>}{showAddClient && <button className="button button-primary top-add" onClick={() => setIntakeOpen(true)}><Plus size={16} />Add client</button>}</div></header>
         <div className="page-content">
           {loadError && <div className="load-error" role="alert"><span>{loadError}</span><button onClick={refreshWorkbook}>Retry <RefreshCw size={14} /></button></div>}
+          {caseError && <div className="load-error" role="alert"><span>{caseError}</span><button onClick={() => setCaseError('')}>Dismiss <X size={14} /></button></div>}
           {page === 'dashboard'
             ? <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />
             : page === 'clients'
