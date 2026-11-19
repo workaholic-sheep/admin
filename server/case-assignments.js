@@ -1,4 +1,5 @@
 import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
+import { splitName } from '../src/names.js';
 
 // Clients_Additional_Info spreadsheet:
 //   Client_Info  – one row per MasterData client, kept in step with MasterData.
@@ -7,13 +8,14 @@ import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
 
 export const CLIENT_INFO_TAB = 'Client_Info';
 export const CLIENT_INFO_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Address', 'Current Address'];
-export const CASE_TAB_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Date Added'];
-// Columns the app keeps equal to MasterData. Everything else (Current Address, Date Added,
+export const CASE_TAB_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Team Member', 'Date Added'];
+// Columns the app keeps equal to MasterData. Everything else (Date Added, Team Member,
 // any column staff add themselves) is written once at most and then left alone.
-const CLIENT_INFO_SYNCED = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Address'];
+const CLIENT_INFO_SYNCED = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Address', 'Current Address'];
 const CASE_TAB_SYNCED = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone'];
 
 export class CaseSetupError extends Error {}
+export class CaseNotFoundError extends Error {}
 
 const key = (value) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const ALIASES = {
@@ -26,6 +28,7 @@ const ALIASES = {
   address: ['address', 'homeaddress', 'mailingaddress'],
   currentaddress: ['currentaddress'],
   dateadded: ['dateadded', 'added', 'addedon'],
+  teammember: ['teammember', 'assignedto', 'handledby', 'staff'],
 };
 
 function columnOf(headers, name) {
@@ -33,12 +36,6 @@ function columnOf(headers, name) {
   return headers.findIndex((header) => accepted.includes(key(header)));
 }
 
-// "Maria Elena Lopez Garcia" → Maria / Elena Lopez / Garcia.
-export function splitName(fullName) {
-  const parts = String(fullName ?? '').trim().split(/\s+/).filter(Boolean);
-  if (parts.length <= 1) return { first: parts[0] || '', middle: '', last: '' };
-  return { first: parts[0], middle: parts.slice(1, -1).join(' '), last: parts.at(-1) };
-}
 
 function centralToday() {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
@@ -46,7 +43,8 @@ function centralToday() {
 }
 
 function clientValues(client) {
-  const name = splitName(client.name);
+  // MasterData has separate name columns now; splitting is only for older single-name rows.
+  const name = client.firstName || client.lastName ? { first: client.firstName || '', middle: client.middleName || '', last: client.lastName || '' } : splitName(client.name);
   return {
     Id: client.id,
     'First Name': name.first,
@@ -55,7 +53,7 @@ function clientValues(client) {
     Email: client.email || '',
     Phone: client.phone || '',
     Address: client.address || '',
-    'Current Address': '',
+    'Current Address': client.currentAddress || '',
     'Date Added': centralToday(),
   };
 }
@@ -67,6 +65,20 @@ function rowFor(headers, values) {
     if (column !== -1) row[column] = String(value ?? '');
   }
   return row;
+}
+
+// Id → team member for one case tab (blank when nobody is assigned yet).
+function teamIn(tab) {
+  const result = new Map();
+  if (!tab) return result;
+  const idColumn = columnOf(tab.headers, 'Id');
+  const teamColumn = columnOf(tab.headers, 'Team Member');
+  if (idColumn === -1) return result;
+  for (const row of tab.rows) {
+    const id = String(row[idColumn] ?? '').trim();
+    if (id) result.set(id, teamColumn === -1 ? '' : String(row[teamColumn] ?? '').trim());
+  }
+  return result;
 }
 
 function idsIn(tab) {
@@ -101,7 +113,7 @@ export function createCaseAssignments(tabs, setupMessage = '') {
   }
 
   function remember(map) {
-    cached = Object.fromEntries(CASE_TYPES.map((type) => [type, idsIn(map.get(type))]));
+    cached = Object.fromEntries(CASE_TYPES.map((type) => [type, teamIn(map.get(type))]));
     return cached;
   }
 
@@ -159,6 +171,22 @@ export function createCaseAssignments(tabs, setupMessage = '') {
       const changed = add ? await addToTab(map, type, clients) : await removeFromTab(map, type, clients.map((client) => client.id));
       remember(map);
       return changed;
+    }),
+
+    // Records which team member handles this client's case of one type ('' clears it).
+    setTeamMember: (type, clientId, member) => queued(async () => {
+      if (!CASE_TYPES.includes(type)) throw new CaseSetupError(`Unknown case type "${type}".`);
+      const map = await requireTabs().read(CASE_TYPES);
+      if (!map.get(type)) throw new CaseNotFoundError(`This client is not in ${type}.`);
+      const tab = await ensure(map.get(type), type, CASE_TAB_HEADERS);
+      const idColumn = columnOf(tab.headers, 'Id');
+      const index = tab.rows.findIndex((row) => String(row[idColumn] ?? '').trim() === clientId);
+      if (index === -1) throw new CaseNotFoundError(`This client is not in ${type}.`);
+      const column = columnOf(tab.headers, 'Team Member');
+      await requireTabs().update(tab, [{ rowNumber: index + 2, column, value: member }]);
+      tab.rows[index][column] = member;
+      map.set(type, tab);
+      return remember(map);
     }),
 
     // Makes the case tabs match a "VAWA + I-485" style value from the intake or edit form.

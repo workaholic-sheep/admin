@@ -1,5 +1,5 @@
 import { google } from 'googleapis';
-import { ADDRESS_HEADERS, DOB_HEADERS, GENDER_HEADERS, ageFrom, mapMasterData } from './workbook.js';
+import { ADDRESS_HEADERS, CURRENT_ADDRESS_HEADERS, DOB_HEADERS, GENDER_HEADERS, ID_HEADERS, ageFrom, mapMasterData } from './workbook.js';
 import { REMINDER_HEADERS, REMINDER_SHEET, canonicalReminderHeader, mapReminder, nextReminderId, reminderCells } from './payment-reminders.js';
 import { CREDENTIAL_HEADERS, CREDENTIAL_SHEET, credentialRow, mapCredentialRow } from './credentials.js';
 import { WORK_PERMIT_HEADERS, WorkPermitError, mapWorkPermit, newWorkPermit, workPermitCells } from './work-permits.js';
@@ -297,6 +297,11 @@ export function createGoogleSheetStore({
 
     put('ID No.', clientId);
     put('ClientID', clientId);
+    put('Id', clientId);
+    put('First Name', String(input.firstName ?? '').trim());
+    put('Middle Name', String(input.middleName ?? '').trim());
+    put('Last Name', String(input.lastName ?? '').trim());
+    for (const header of CURRENT_ADDRESS_HEADERS) put(header, String(input.currentAddress ?? '').trim());
     put('Client Name', String(input.name ?? '').trim());
     put('ClientName', String(input.name ?? '').trim());
     put('Email', email);
@@ -358,7 +363,7 @@ export function createGoogleSheetStore({
 
   async function completeFollowUp(clientId) {
     const { sheets, headers, rows, quotedSheet } = await getRows();
-    const idIndex = headers.findIndex((header) => ['id no.', 'clientid', 'client id'].includes(normalize(header)));
+    const idIndex = headers.findIndex((header) => ID_HEADERS.map(normalize).includes(normalize(header)));
     const nextContactIndex = headers.findIndex((header) => normalize(header) === normalize('Next date of Contact'));
     const rowIndex = rows.findIndex((row) => String(row[idIndex] ?? '') === clientId);
     if (rowIndex < 0) throw new Error('Client not found.');
@@ -382,7 +387,7 @@ export function createGoogleSheetStore({
   async function updateClient(clientId, input) {
     const { sheets, headers, rows, quotedSheet } = await getRows();
     const indexes = new Map(headers.map((header, index) => [normalize(header), index]));
-    const idIndex = indexes.get(normalize('ID No.')) ?? indexes.get(normalize('ClientID')) ?? indexes.get(normalize('Client ID'));
+    const idIndex = ID_HEADERS.map((header) => indexes.get(normalize(header))).find((index) => index !== undefined);
     const rowIndex = rows.findIndex((row) => String(row[idIndex] ?? '') === clientId);
     if (rowIndex < 0) throw new Error('Client not found.');
 
@@ -407,6 +412,9 @@ export function createGoogleSheetStore({
     const putDate = (header, value) => put(header, parseDateFormula(value), true);
 
     put('Client Name', input.name);
+    put('First Name', String(input.firstName ?? '').trim());
+    put('Middle Name', String(input.middleName ?? '').trim());
+    put('Last Name', String(input.lastName ?? '').trim());
     put('ClientName', input.name);
     put('Email', email);
     put('PHONE', input.phone);
@@ -423,6 +431,7 @@ export function createGoogleSheetStore({
     for (const header of DOB_HEADERS) putDate(header, input.dateOfBirth);
     for (const header of GENDER_HEADERS) put(header, input.gender);
     for (const header of ADDRESS_HEADERS) put(header, input.address);
+    for (const header of CURRENT_ADDRESS_HEADERS) put(header, String(input.currentAddress ?? '').trim());
     if (parseDateFormula(input.dateOfBirth)) put('Age', ageFormula(indexes, rowIndex + 2), true);
 
     await sheets.spreadsheets.values.batchUpdate({

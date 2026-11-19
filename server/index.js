@@ -8,7 +8,9 @@ import { createSessionAuth } from './session-auth.js';
 import { createReminderWorkbookStore } from './payment-reminders.js';
 import { CredentialError, createCredentialService, createCredentialWorkbookStore, credentialInput, credentialKeyFor } from './credentials.js';
 import { createWorkbookStore } from './workbook.js';
-import { CaseSetupError, createCaseAssignments } from './case-assignments.js';
+import { CaseNotFoundError, CaseSetupError, createCaseAssignments } from './case-assignments.js';
+import { TEAM_MEMBERS } from '../src/team.js';
+import { nameParts } from '../src/names.js';
 import { createGoogleTabs, createWorkbookTabs } from './sheet-tabs.js';
 import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
 import {
@@ -157,9 +159,11 @@ app.post('/api/clients/:clientId/follow-up/done', async (request, response, next
   }
 });
 
-// A client's case types come from the case tabs, shown as "VAWA + I-485" like the old CaseType value.
+// A client's case types come from the case tabs, shown as "VAWA + I-485" like the old CaseType value;
+// caseTeam says who handles each one, e.g. { VAWA: 'Kyle', 'I-485': '' }.
 function withCaseTypes(client, assignments) {
-  return { ...client, caseType: assignments ? CASE_TYPES.filter((type) => assignments[type]?.has(client.id)).join(' + ') : '' };
+  const types = assignments ? CASE_TYPES.filter((type) => assignments[type]?.has(client.id)) : [];
+  return { ...client, caseType: types.join(' + '), caseTeam: Object.fromEntries(types.map((type) => [type, assignments[type].get(client.id) || ''])) };
 }
 
 // After an intake or edit: case-type checkboxes go to the case tabs (not MasterData), and the
@@ -210,6 +214,24 @@ app.get('/api/clients', async (_request, response, next) => {
     const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workbookPath)).mtime.toISOString();
     response.json({ clients: clients.map((client) => withCaseTypes(client, assignments)), caseError: caseError || syncError, modifiedAt, source: sourceName });
   } catch (error) {
+    next(error);
+  }
+});
+
+// Which team member handles one client's case of one type. Blank clears it.
+app.put('/api/case-assignments/team', async (request, response, next) => {
+  const caseType = String(request.body?.caseType || '');
+  const clientId = String(request.body?.clientId || '');
+  const teamMember = String(request.body?.teamMember || '').trim();
+  if (!CASE_TYPES.includes(caseType)) return response.status(400).json({ error: 'Choose a valid case type.' });
+  if (!clientId) return response.status(400).json({ error: 'Choose a client.' });
+  if (teamMember && !TEAM_MEMBERS.includes(teamMember)) return response.status(400).json({ error: 'Choose someone from the team list.' });
+  try {
+    const assignments = await cases.setTeamMember(caseType, clientId, teamMember);
+    response.json({ caseType, clientId, teamMember, caseTeam: withCaseTypes({ id: clientId }, assignments).caseTeam });
+  } catch (error) {
+    if (error instanceof CaseNotFoundError) return response.status(404).json({ error: error.message });
+    if (error instanceof CaseSetupError) return response.status(503).json({ error: error.message });
     next(error);
   }
 });
@@ -462,9 +484,12 @@ function personalDetailsError(input) {
 app.post('/api/clients', async (request, response, next) => {
   try {
     const input = request.body || {};
-    const name = String(input.name || '').trim();
+    const names = nameParts(input);
+    const { name } = names;
     const email = String(input.email || '').trim();
-    if (!name) return response.status(400).json({ error: 'Client name is required.' });
+    if (!names.firstName && !names.lastName) return response.status(400).json({ error: 'Enter a first or last name for the client.' });
+    if (name.length > 160) return response.status(400).json({ error: 'The client name must be 160 characters or fewer.' });
+    if (String(input.currentAddress || '').trim().length > 300) return response.status(400).json({ error: 'Current address must be 300 characters or fewer.' });
     const personalError = personalDetailsError(input);
     if (personalError) return response.status(400).json({ error: personalError });
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -489,9 +514,13 @@ app.post('/api/clients', async (request, response, next) => {
       dateOfBirth: String(input.dateOfBirth || '').trim(),
       gender: String(input.gender || '').trim(),
       address: String(input.address || '').trim(),
+      currentAddress: String(input.currentAddress || '').trim(),
+      firstName: names.firstName,
+      middleName: names.middleName,
+      lastName: names.lastName,
     });
     const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workbookPath)).mtime.toISOString();
-    const { client: saved, caseError } = await saveCaseTypes(client, input.caseType);
+    const { client: saved, caseError } = await saveCaseTypes({ ...client, ...names, currentAddress: String(input.currentAddress || '').trim() }, input.caseType);
     response.status(201).json({ client: saved, caseError, modifiedAt, source: sourceName });
   } catch (error) {
     if (error.message.includes('already exists')) return response.status(409).json({ error: error.message });
@@ -503,9 +532,12 @@ app.post('/api/clients', async (request, response, next) => {
 app.put('/api/clients/:clientId', async (request, response, next) => {
   try {
     const input = request.body || {};
-    const name = String(input.name || '').trim();
+    const names = nameParts(input);
+    const { name } = names;
     const email = String(input.email || '').trim();
-    if (!name) return response.status(400).json({ error: 'Client name is required.' });
+    if (!names.firstName && !names.lastName) return response.status(400).json({ error: 'Enter a first or last name for the client.' });
+    if (name.length > 160) return response.status(400).json({ error: 'The client name must be 160 characters or fewer.' });
+    if (String(input.currentAddress || '').trim().length > 300) return response.status(400).json({ error: 'Current address must be 300 characters or fewer.' });
     const personalError = personalDetailsError(input);
     if (personalError) return response.status(400).json({ error: personalError });
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -545,6 +577,10 @@ app.put('/api/clients/:clientId', async (request, response, next) => {
       dateOfBirth: String(input.dateOfBirth || '').trim(),
       gender: String(input.gender || '').trim(),
       address: String(input.address || '').trim(),
+      currentAddress: String(input.currentAddress || '').trim(),
+      firstName: names.firstName,
+      middleName: names.middleName,
+      lastName: names.lastName,
     });
     const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(workbookPath)).mtime.toISOString();
     const { client: saved, caseError } = await saveCaseTypes(client, input.caseType);

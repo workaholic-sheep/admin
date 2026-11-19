@@ -38,12 +38,15 @@ import {
   Sun,
   Trash2,
   Upload,
+  UserRound,
   UsersRound,
   X,
 } from 'lucide-react';
 import { CASE_TYPES, countCaseTypes, isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
 import { pageFromPath, pathForPage } from './routes.js';
 import { scanDocument, warmUpScanner } from './document-scan.js';
+import { TEAM_MEMBERS } from './team.js';
+import { splitName } from './names.js';
 
 const frequencies = [
   'Once a Month',
@@ -134,6 +137,16 @@ function PersonalFields({ form, onChange, scanned = () => undefined }) {
     <label className="field">Date of birth<input className={scanned('dateOfBirth')} type="date" name="dateOfBirth" value={form.dateOfBirth} onChange={onChange} max={centralDateKey()} />{age && <span className="field-hint">Age {age}</span>}</label>
     <label className="field">Gender<select className={scanned('gender')} name="gender" value={form.gender} onChange={onChange}><option value="">Not set</option>{genderOptions.map((gender) => <option key={gender}>{gender}</option>)}</select><ChevronDown size={15} /></label>
     <label className="field field-wide">Address<input className={scanned('address')} name="address" value={form.address} onChange={onChange} maxLength={300} placeholder="Street, city, state, ZIP" /></label>
+    <label className="field field-wide">Current address<input name="currentAddress" value={form.currentAddress} onChange={onChange} maxLength={300} placeholder="Only if different from the address above" /></label>
+  </>;
+}
+
+// MasterData stores the name in three columns, so the forms ask for each part.
+function NameFields({ form, onChange, scanned = () => undefined, autoFocus = false }) {
+  return <>
+    <label className="field"><span>First name <b>*</b></span><input autoFocus={autoFocus} className={scanned('firstName')} name="firstName" value={form.firstName} onChange={onChange} required maxLength={60} /></label>
+    <label className="field">Middle name<input className={scanned('middleName')} name="middleName" value={form.middleName} onChange={onChange} maxLength={60} /></label>
+    <label className="field">Last name<input className={scanned('lastName')} name="lastName" value={form.lastName} onChange={onChange} maxLength={60} /></label>
   </>;
 }
 
@@ -360,7 +373,15 @@ function DocumentScanner({ onScanned }) {
 function applyScan(current, result) {
   const next = { ...current };
   const filled = [];
-  const labels = { name: 'name', email: 'email', phone: 'phone', dateOfBirth: 'date of birth', gender: 'gender', address: 'address' };
+  // A scanned ID gives one full name; split it into the three name fields for staff to check.
+  if (result.fields.name) {
+    const parts = splitName(result.fields.name);
+    [['firstName', parts.first], ['middleName', parts.middle], ['lastName', parts.last]].forEach(([key, value]) => {
+      next[key] = value;
+      if (value) filled.push({ key, label: 'name' });
+    });
+  }
+  const labels = { email: 'email', phone: 'phone', dateOfBirth: 'date of birth', gender: 'gender', address: 'address' };
   for (const [key, label] of Object.entries(labels)) {
     if (result.fields[key]) {
       next[key] = result.fields[key];
@@ -378,7 +399,9 @@ function ClientForm({ onClose, onCreated }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [form, setForm] = useState({
-    name: '',
+    firstName: '',
+    middleName: '',
+    lastName: '',
     email: '',
     phone: '',
     caseType: '',
@@ -395,6 +418,7 @@ function ClientForm({ onClose, onCreated }) {
     dateOfBirth: '',
     gender: '',
     address: '',
+    currentAddress: '',
   });
 
   const [scannedFields, setScannedFields] = useState(() => new Set());
@@ -417,7 +441,7 @@ function ClientForm({ onClose, onCreated }) {
     if (result.details.length) fields.add('notes');
     setScannedFields(fields);
     const parts = [];
-    if (filled.length) parts.push(`filled ${filled.map((field) => field.label).join(', ')}`);
+    if (filled.length) parts.push(`filled ${[...new Set(filled.map((field) => field.label))].join(', ')}`);
     if (result.details.length) parts.push(`added ${result.details.map((detail) => detail.label.toLowerCase()).join(', ')} to notes`);
     return { found: parts.length > 0, text: `Read a ${result.docType}: ${parts.join('; ')}. Check each highlighted value before saving.` };
   }
@@ -455,7 +479,7 @@ function ClientForm({ onClose, onCreated }) {
           <DocumentScanner onScanned={fillFromScan} />
           <div className="form-section-title"><span>01</span><h3>Client details</h3></div>
           <div className="form-grid">
-            <label className="field field-wide"><span>Client name <b>*</b></span><input autoFocus className={scanned('name')} name="name" value={form.name} onChange={update} required maxLength={120} placeholder="Full name" /></label>
+            <NameFields form={form} onChange={update} scanned={scanned} autoFocus />
             <label className="field">Email<input className={scanned('email')} name="email" type="email" value={form.email} onChange={update} maxLength={180} placeholder="name@example.com" /></label>
             <label className="field">Phone<input className={scanned('phone')} name="phone" value={form.phone} onChange={update} maxLength={40} placeholder="Phone number" /></label>
             <PersonalFields form={form} onChange={update} scanned={scanned} />
@@ -485,7 +509,9 @@ function ClientForm({ onClose, onCreated }) {
 
 function editValues(client) {
   return {
-    name: client.name || '',
+    firstName: client.firstName || '',
+    middleName: client.middleName || '',
+    lastName: client.lastName || '',
     email: client.email || '',
     phone: client.phone || '',
     caseType: client.caseType || '',
@@ -502,10 +528,12 @@ function editValues(client) {
     dateOfBirth: client.dateOfBirth || '',
     gender: client.gender || '',
     address: client.address || '',
+    currentAddress: client.currentAddress || '',
   };
 }
 
-function ClientDetails({ client, courtDates, onClose, onUpdate }) {
+function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember }) {
+  const clientCaseTypes = CASE_TYPES.filter((type) => isCaseTypeSelected(client.caseType, type));
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -555,7 +583,7 @@ function ClientDetails({ client, courtDates, onClose, onUpdate }) {
         {editing ? <form id="edit-client-form" className="edit-client-form" onSubmit={save}>
           <div className="detail-status"><span className="eyebrow">EDIT CLIENT · {client.id}</span></div>
           <div className="form-grid detail-edit-grid">
-            <label className="field field-wide">Client name<input name="name" value={form.name} onChange={update} required maxLength={120} /></label>
+            <NameFields form={form} onChange={update} />
             <label className="field">Email<input name="email" type="email" value={form.email} onChange={update} maxLength={180} /></label>
             <label className="field">Phone<input name="phone" value={form.phone} onChange={update} maxLength={40} /></label>
             <PersonalFields form={form} onChange={update} />
@@ -582,6 +610,7 @@ function ClientDetails({ client, courtDates, onClose, onUpdate }) {
             <div><dt>Age</dt><dd>{ageFromBirthDate(client.dateOfBirth) || client.age || '—'}</dd></div>
             <div><dt>Gender</dt><dd>{client.gender || '—'}</dd></div>
             <div className="detail-wide"><dt>Address</dt><dd>{client.address || '—'}</dd></div>
+            <div className="detail-wide"><dt>Current address</dt><dd>{client.currentAddress || '—'}</dd></div>
             <div><dt>Translator needed</dt><dd>{client.translator || '—'}</dd></div>
             <div><dt>Date onboarded</dt><dd>{formatDate(client.onboardingDate)}</dd></div>
             <div><dt>Date of interview</dt><dd>{formatDate(client.interviewDate)}</dd></div>
@@ -591,6 +620,12 @@ function ClientDetails({ client, courtDates, onClose, onUpdate }) {
             <div><dt>Last date with attorney</dt><dd>{formatDate(client.lastAttorneyDate)}</dd></div>
             <div><dt>Payment status</dt><dd>{client.paymentStatus || '—'}</dd></div>
           </dl>
+          <section className="detail-cases">
+            <div className="detail-court-heading"><h3>Cases &amp; team</h3><span>{clientCaseTypes.length}</span></div>
+            {clientCaseTypes.length
+              ? <ul className="detail-case-list">{clientCaseTypes.map((type) => <li key={type}><span className="case-pill">{type}</span><TeamSelect value={client.caseTeam?.[type] || ''} onChange={(member) => onSetTeamMember(client, type, member)} label={`Team member for the ${type} case`} /></li>)}</ul>
+              : <p className="court-date-empty">Not in any case type yet. Drag this client onto a case type in the sidebar, or tick one under Edit.</p>}
+          </section>
           <section className="detail-court-dates">
             <div className="detail-court-heading"><h3>Court dates</h3><span>{clientCourtDates.length}</span></div>
             {clientCourtDates.length ? <div className="court-date-list">{clientCourtDates.map((event) => <article className="court-date-item" key={event.id}>
@@ -1377,18 +1412,32 @@ function setDragLabel(event, text) {
   window.setTimeout(() => ghost.remove(), 0);
 }
 
-function CaseTypePills({ value }) {
+function CaseTypePills({ value, team = {} }) {
   const types = CASE_TYPES.filter((type) => isCaseTypeSelected(value, type));
   if (!types.length) return <span className="muted">None</span>;
-  return <span className="case-pills">{types.map((type) => <span key={type} className="case-pill">{type}</span>)}</span>;
+  return <span className="case-pills">{types.map((type) => <span key={type} className="case-pill" title={team[type] ? `${type} handled by ${team[type]}` : `${type}: no team member yet`}>{type}{team[type] && <b> · {team[type]}</b>}</span>)}</span>;
 }
 
-function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, view = 'clients' }) {
+// Picks who handles one client's case. Keeps showing a name typed straight into the sheet even if it isn't on the team list.
+function TeamSelect({ value = '', onChange, label, disabled = false }) {
+  const names = value && !TEAM_MEMBERS.includes(value) ? [...TEAM_MEMBERS, value] : TEAM_MEMBERS;
+  return <span className={`team-select ${value ? '' : 'is-empty'}`} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+    <UserRound size={14} aria-hidden="true" />
+    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} disabled={disabled}>
+      <option value="">Unassigned</option>
+      {names.map((name) => <option key={name} value={name}>{name}</option>)}
+    </select>
+    <ChevronDown size={13} aria-hidden="true" />
+  </span>;
+}
+
+function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, onSetTeamMember, view = 'clients' }) {
   const [selected, setSelected] = useState(() => new Set());
   const [assigning, setAssigning] = useState(false);
   const [frequency, setFrequency] = useState('All frequencies');
   const [payment, setPayment] = useState('All payment statuses');
   const [sortOrder, setSortOrder] = useState('name');
+  const [teamFilter, setTeamFilter] = useState('all');
   const today = centralDateKey();
   const caseType = view.startsWith('case:') ? view.slice('case:'.length) : '';
   const titles = {
@@ -1408,7 +1457,9 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
     const matchesFollowUps = view !== 'follow-ups' && view !== 'follow-ups-week' || followUpDays !== null && followUpDays >= 0;
     const matchesWeek = view !== 'follow-ups-week' || followUpDays <= 7;
     const matchesPayments = view !== 'payments' || client.paymentStatus.toLowerCase() === 'pending';
-    return matchesQuery && matchesFrequency && matchesPayment && matchesCaseType && matchesFollowUps && matchesWeek && matchesPayments;
+    const handler = caseType ? client.caseTeam?.[caseType] || '' : '';
+    const matchesTeam = !caseType || teamFilter === 'all' || (teamFilter === 'none' ? !handler : handler === teamFilter);
+    return matchesTeam && matchesQuery && matchesFrequency && matchesPayment && matchesCaseType && matchesFollowUps && matchesWeek && matchesPayments;
   }).sort((left, right) => {
     if (view === 'follow-ups' || view === 'follow-ups-week') return left.nextContactDate.localeCompare(right.nextContactDate);
     if (sortOrder === 'clientId') {
@@ -1465,11 +1516,12 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, email or ID" aria-label="Search clients" />{search && <button className="clear-search" onClick={() => onSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
           <FilterMenu label="Meeting frequency" value={frequency} onChange={setFrequency} icon={SlidersHorizontal} options={[{ value: 'All frequencies', label: 'All frequencies' }, ...frequencies.map((item) => ({ value: item, label: item }))]} />
           <FilterMenu label="Payment status" value={payment} onChange={setPayment} icon={CreditCard} options={[{ value: 'All payment statuses', label: 'All payment statuses' }, { value: 'Pending', label: 'Pending' }, { value: 'Up to Date', label: 'Up to Date' }]} />
+          {caseType && <FilterMenu label="Team member" value={teamFilter} onChange={setTeamFilter} icon={UserRound} options={[{ value: 'all', label: 'All team members' }, ...TEAM_MEMBERS.map((name) => ({ value: name, label: name })), { value: 'none', label: 'Unassigned' }]} />}
           <FilterMenu label="Sort clients" value={sortOrder} onChange={setSortOrder} icon={ArrowDownAZ} options={[{ value: 'name', label: 'Name A-Z' }, { value: 'clientId', label: 'CL number' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th><th>Case type</th><th>Meeting frequency</th><th>Next contact</th><th>Payment</th><th aria-label="Open client" /></tr></thead><tbody>
-          {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td><td><CaseTypePills value={client.caseType} /></td><td>{client.frequency || <span className="muted">Not set</span>}</td><td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td><td><Status value={client.paymentStatus} /></td><td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
-          {!visibleClients.length && <tr><td colSpan="7"><div className="table-empty"><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></div></td></tr>}
+        <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th><th>Case type</th><th>Meeting frequency</th><th>Next contact</th><th>Payment</th>{caseType && <th>Team member</th>}<th aria-label="Open client" /></tr></thead><tbody>
+          {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td><td><CaseTypePills value={client.caseType} team={client.caseTeam} /></td><td>{client.frequency || <span className="muted">Not set</span>}</td><td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td><td><Status value={client.paymentStatus} /></td>{caseType && <td><TeamSelect value={client.caseTeam?.[caseType] || ''} onChange={(member) => onSetTeamMember(client, caseType, member)} label={`Team member for ${client.name}'s ${caseType} case`} /></td>}<td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
+          {!visibleClients.length && <tr><td colSpan={caseType ? 8 : 7}><div className="table-empty"><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visibleClients.length} of {clients.length}</span><span><i className="sync-dot" /> Synced from MasterData</span></div>
       </section>
@@ -1731,8 +1783,8 @@ export default function App() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Could not update case types.');
-      const confirmed = new Map(result.clients.map((client) => [client.id, client.caseType]));
-      setClients((current) => current.map((client) => confirmed.has(client.id) ? { ...client, caseType: confirmed.get(client.id) } : client));
+      const confirmed = new Map(result.clients.map((client) => [client.id, client]));
+      setClients((current) => current.map((client) => confirmed.has(client.id) ? { ...client, caseType: confirmed.get(client.id).caseType, caseTeam: confirmed.get(client.id).caseTeam } : client));
       const who = changing.length === 1 ? changing[0].name : `${changing.length} clients`;
       setToast(add ? `Added ${who} to ${caseType}` : `Removed ${who} from ${caseType}`);
       return true;
@@ -1741,6 +1793,31 @@ export default function App() {
       setClients((current) => current.map((client) => original.has(client.id) ? { ...client, caseType: original.get(client.id) } : client));
       setCaseError(error.message);
       return false;
+    }
+  }
+
+  // Who handles one client's case of one type. Shown at once; put back if the sheet can't be saved.
+  async function setTeamMember(client, caseType, member) {
+    const previous = client.caseTeam?.[caseType] || '';
+    if (previous === member) return;
+    const apply = (value) => {
+      const patch = (item) => item.id === client.id ? { ...item, caseTeam: { ...item.caseTeam, [caseType]: value } } : item;
+      setClients((current) => current.map(patch));
+      setSelectedClient((current) => current && patch(current));
+    };
+    apply(member);
+    try {
+      const response = await fetch('/api/case-assignments/team', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseType, clientId: client.id, teamMember: member }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not save the team member.');
+      setToast(member ? `${member} now handles ${client.name}'s ${caseType} case` : `${client.name}'s ${caseType} case is unassigned`);
+    } catch (error) {
+      apply(previous);
+      setCaseError(error.message);
     }
   }
 
@@ -1818,7 +1895,7 @@ export default function App() {
           {page === 'dashboard'
             ? <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />
             : page === 'clients'
-              ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} />
+              ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} />
               : page === 'work-permits'
                 ? <WorkPermitList clients={clients} onToast={setToast} />
               : page === 'payments'
@@ -1826,7 +1903,7 @@ export default function App() {
               : page === 'court-dates' || resultView === 'court-dates'
                 ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
                 : resultView
-                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} view={resultView} />
+                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} view={resultView} />
               : page === 'credentials'
                 ? <CredentialsPage onToast={setToast} />
               : extraTab
@@ -1836,7 +1913,7 @@ export default function App() {
         </div>
       </main>
       {intakeOpen && <ClientForm onClose={() => setIntakeOpen(false)} onCreated={createdClient} />}
-      {selectedClient && <ClientDetails client={selectedClient} courtDates={courtDates} onClose={() => setSelectedClient(null)} onUpdate={updateClient} />}
+      {selectedClient && <ClientDetails client={selectedClient} courtDates={courtDates} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onSetTeamMember={setTeamMember} />}
       {toast && <div className="toast"><span><Check size={15} /></span>{toast}</div>}
     </div>
   );

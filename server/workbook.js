@@ -3,6 +3,7 @@ import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import xmlDom from '@xmldom/xmldom';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { joinName, splitName } from '../src/names.js';
 
 const { DOMParser, XMLSerializer } = xmlDom;
 const MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
@@ -57,6 +58,9 @@ function normalizeDate(value) {
 export const DOB_HEADERS = ['Date of Birth', 'DOB', 'Birth Date', 'Birthdate'];
 export const GENDER_HEADERS = ['Gender', 'Sex'];
 export const ADDRESS_HEADERS = ['Address', 'Home Address', 'Mailing Address'];
+// Old sheets used "ID No."; the current MasterData uses "Id".
+export const ID_HEADERS = ['ID No.', 'ClientID', 'Client ID', 'Id'];
+export const CURRENT_ADDRESS_HEADERS = ['Current Address'];
 
 // Reads the first non-empty value among header spellings, ignoring case and stray spaces.
 function pickField(row, labels) {
@@ -75,13 +79,25 @@ export function ageFrom(isoDate, today = new Date()) {
   return age >= 0 && age < 130 ? String(age) : '';
 }
 
+// Current MasterData has First / Middle / Last Name; older sheets had one "Client Name".
+function nameFromRow(row) {
+  const first = String(pickField(row, ['First Name']) ?? '').trim();
+  const middle = String(pickField(row, ['Middle Name']) ?? '').trim();
+  const last = String(pickField(row, ['Last Name']) ?? '').trim();
+  if (first || last) return { name: joinName(first, middle, last), firstName: first, middleName: middle, lastName: last };
+  const full = String(pickField(row, ['Client Name', 'ClientName', 'Name']) ?? '').trim();
+  const parts = splitName(full);
+  return { name: full, firstName: parts.first, middleName: parts.middle, lastName: parts.last };
+}
+
 export function mapMasterData(row) {
   const dateOfBirth = normalizeDate(pickField(row, DOB_HEADERS));
   return {
-    id: row['ID No.'] || row.ClientID || row['Client ID'] || '',
-    name: row['Client Name'] || row.ClientName || row.Name || '',
-    email: row.Email || '',
-    phone: row.PHONE || '',
+    id: String(pickField(row, ID_HEADERS) ?? '').trim(),
+    ...nameFromRow(row),
+    email: String(pickField(row, ['Email', 'Email Address']) ?? '').trim(),
+    phone: String(pickField(row, ['PHONE', 'Phone Number']) ?? '').trim(),
+    currentAddress: String(pickField(row, CURRENT_ADDRESS_HEADERS) ?? '').trim(),
     translator: row['Translator Needed'] || '',
     onboardingDate: normalizeDate(row['Date Onboarded']),
     frequency: row['Meeting Frequency'] || '',
@@ -108,6 +124,10 @@ function personalValues(sheet, input, rowNumber) {
   for (const header of DOB_HEADERS) values[header] = dateOfBirth || '';
   for (const header of GENDER_HEADERS) values[header] = String(input.gender ?? '').trim();
   for (const header of ADDRESS_HEADERS) values[header] = String(input.address ?? '').trim();
+  for (const header of CURRENT_ADDRESS_HEADERS) values[header] = String(input.currentAddress ?? '').trim();
+  values['First Name'] = String(input.firstName ?? '').trim();
+  values['Middle Name'] = String(input.middleName ?? '').trim();
+  values['Last Name'] = String(input.lastName ?? '').trim();
   const dobColumn = DOB_HEADERS.map((header) => findColumn(sheet, header)).find(Boolean);
   if (dateOfBirth && dobColumn) {
     const cell = `${columnName(dobColumn)}${rowNumber}`;
@@ -218,7 +238,7 @@ function findColumn(sheet, ...labels) {
 function nextClientId(sheet) {
   let largest = 0;
   for (let rowNumber = HEADER_ROW + 1; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
-    const value = cellText(sheet.getRow(rowNumber).getCell(findColumn(sheet, 'ID No.', 'ClientID', 'Client ID')));
+    const value = cellText(sheet.getRow(rowNumber).getCell(findColumn(sheet, ...ID_HEADERS)));
     const match = value.match(/^CL-(\d+)$/i);
     if (match) largest = Math.max(largest, Number(match[1]));
   }
@@ -460,6 +480,7 @@ async function addClientToWorkbook(filePath, input) {
     ...personalValues(master, input, rowNumber),
     'ID No.': clientId,
     ClientID: clientId,
+    Id: clientId,
     'Client Name': String(input.name ?? '').trim(),
     ClientName: String(input.name ?? '').trim(),
     Email: email,
@@ -523,7 +544,7 @@ async function updateClientInWorkbook(filePath, clientId, input) {
   const workbook = await loadWorkbook(filePath);
   const master = workbook.getWorksheet(MASTER_SHEET);
   if (!master) throw new Error('The workbook must contain a MasterData sheet.');
-  const idColumn = findColumn(master, 'ID No.', 'ClientID', 'Client ID');
+  const idColumn = findColumn(master, ...ID_HEADERS);
   let rowNumber = 0;
   for (let currentRow = HEADER_ROW + 1; currentRow <= master.actualRowCount; currentRow += 1) {
     if (cellText(master.getRow(currentRow).getCell(idColumn)) === clientId) rowNumber = currentRow;
@@ -568,7 +589,7 @@ async function completeFollowUpInWorkbook(filePath, clientId) {
   const workbook = await loadWorkbook(filePath);
   const master = workbook.getWorksheet(MASTER_SHEET);
   if (!master) throw new Error('The workbook must contain a MasterData sheet.');
-  const idColumn = findColumn(master, 'ID No.', 'ClientID', 'Client ID');
+  const idColumn = findColumn(master, ...ID_HEADERS);
   const nextContactColumn = findColumn(master, 'Next date of Contact');
   let rowNumber = 0;
   for (let currentRow = HEADER_ROW + 1; currentRow <= master.actualRowCount; currentRow += 1) {
