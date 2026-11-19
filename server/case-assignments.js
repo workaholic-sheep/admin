@@ -1,5 +1,6 @@
 import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
 import { splitName } from '../src/names.js';
+import { DEFAULT_CASE_STATUS, normalizeCaseStatus } from '../src/case-status.js';
 
 // Clients_Additional_Info spreadsheet:
 //   Client_Info  – one row per MasterData client, kept in step with MasterData.
@@ -8,8 +9,8 @@ import { splitName } from '../src/names.js';
 
 export const CLIENT_INFO_TAB = 'Client_Info';
 export const CLIENT_INFO_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Address', 'Current Address'];
-export const CASE_TAB_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Team Member', 'Date Added'];
-// Columns the app keeps equal to MasterData. Everything else (Date Added, Team Member,
+export const CASE_TAB_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Status', 'Team Member', 'Date Added'];
+// Columns the app keeps equal to MasterData. Everything else (Date Added, Status, Team Member,
 // any column staff add themselves) is written once at most and then left alone.
 const CLIENT_INFO_SYNCED = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Address', 'Current Address'];
 const CASE_TAB_SYNCED = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone'];
@@ -28,6 +29,7 @@ const ALIASES = {
   address: ['address', 'homeaddress', 'mailingaddress'],
   currentaddress: ['currentaddress'],
   dateadded: ['dateadded', 'added', 'addedon'],
+  status: ['status', 'casestatus', 'progress'],
   teammember: ['teammember', 'assignedto', 'handledby', 'staff'],
 };
 
@@ -55,6 +57,7 @@ function clientValues(client) {
     Address: client.address || '',
     'Current Address': client.currentAddress || '',
     'Date Added': centralToday(),
+    Status: DEFAULT_CASE_STATUS,
   };
 }
 
@@ -67,16 +70,21 @@ function rowFor(headers, values) {
   return row;
 }
 
-// Id → team member for one case tab (blank when nobody is assigned yet).
-function teamIn(tab) {
+// Id → { teamMember, status } for one case tab. A blank status counts as Not Started.
+function detailsIn(tab) {
   const result = new Map();
   if (!tab) return result;
   const idColumn = columnOf(tab.headers, 'Id');
   const teamColumn = columnOf(tab.headers, 'Team Member');
+  const statusColumn = columnOf(tab.headers, 'Status');
   if (idColumn === -1) return result;
   for (const row of tab.rows) {
     const id = String(row[idColumn] ?? '').trim();
-    if (id) result.set(id, teamColumn === -1 ? '' : String(row[teamColumn] ?? '').trim());
+    if (!id) continue;
+    result.set(id, {
+      teamMember: teamColumn === -1 ? '' : String(row[teamColumn] ?? '').trim(),
+      status: normalizeCaseStatus(statusColumn === -1 ? '' : row[statusColumn]),
+    });
   }
   return result;
 }
@@ -113,7 +121,7 @@ export function createCaseAssignments(tabs, setupMessage = '') {
   }
 
   function remember(map) {
-    cached = Object.fromEntries(CASE_TYPES.map((type) => [type, teamIn(map.get(type))]));
+    cached = Object.fromEntries(CASE_TYPES.map((type) => [type, detailsIn(map.get(type))]));
     return cached;
   }
 
@@ -173,8 +181,8 @@ export function createCaseAssignments(tabs, setupMessage = '') {
       return changed;
     }),
 
-    // Records which team member handles this client's case of one type ('' clears it).
-    setTeamMember: (type, clientId, member) => queued(async () => {
+    // Saves one per-case detail ('Team Member' or 'Status') for this client's case of one type.
+    setCaseDetail: (type, clientId, field, value) => queued(async () => {
       if (!CASE_TYPES.includes(type)) throw new CaseSetupError(`Unknown case type "${type}".`);
       const map = await requireTabs().read(CASE_TYPES);
       if (!map.get(type)) throw new CaseNotFoundError(`This client is not in ${type}.`);
@@ -182,9 +190,9 @@ export function createCaseAssignments(tabs, setupMessage = '') {
       const idColumn = columnOf(tab.headers, 'Id');
       const index = tab.rows.findIndex((row) => String(row[idColumn] ?? '').trim() === clientId);
       if (index === -1) throw new CaseNotFoundError(`This client is not in ${type}.`);
-      const column = columnOf(tab.headers, 'Team Member');
-      await requireTabs().update(tab, [{ rowNumber: index + 2, column, value: member }]);
-      tab.rows[index][column] = member;
+      const column = columnOf(tab.headers, field);
+      await requireTabs().update(tab, [{ rowNumber: index + 2, column, value }]);
+      tab.rows[index][column] = value;
       map.set(type, tab);
       return remember(map);
     }),

@@ -47,6 +47,7 @@ import { pageFromPath, pathForPage } from './routes.js';
 import { scanDocument, warmUpScanner } from './document-scan.js';
 import { TEAM_MEMBERS } from './team.js';
 import { splitName } from './names.js';
+import { CASE_STATUSES, caseStatusTone } from './case-status.js';
 
 const frequencies = [
   'Once a Month',
@@ -532,7 +533,7 @@ function editValues(client) {
   };
 }
 
-function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember }) {
+function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember, onSetCaseStatus }) {
   const clientCaseTypes = CASE_TYPES.filter((type) => isCaseTypeSelected(client.caseType, type));
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -623,7 +624,7 @@ function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember 
           <section className="detail-cases">
             <div className="detail-court-heading"><h3>Cases &amp; team</h3><span>{clientCaseTypes.length}</span></div>
             {clientCaseTypes.length
-              ? <ul className="detail-case-list">{clientCaseTypes.map((type) => <li key={type}><span className="case-pill">{type}</span><TeamSelect value={client.caseTeam?.[type] || ''} onChange={(member) => onSetTeamMember(client, type, member)} label={`Team member for the ${type} case`} /></li>)}</ul>
+              ? <ul className="detail-case-list">{clientCaseTypes.map((type) => <li key={type}><span className="case-pill">{type}</span><span className="detail-case-controls"><CaseStatusSelect value={client.caseStatus?.[type] || 'Not Started'} onChange={(status) => onSetCaseStatus(client, type, status)} label={`Status of the ${type} case`} /><TeamSelect value={client.caseTeam?.[type] || ''} onChange={(member) => onSetTeamMember(client, type, member)} label={`Team member for the ${type} case`} /></span></li>)}</ul>
               : <p className="court-date-empty">Not in any case type yet. Drag this client onto a case type in the sidebar, or tick one under Edit.</p>}
           </section>
           <section className="detail-court-dates">
@@ -1412,10 +1413,22 @@ function setDragLabel(event, text) {
   window.setTimeout(() => ghost.remove(), 0);
 }
 
-function CaseTypePills({ value, team = {} }) {
+function CaseTypePills({ value, team = {}, status = {} }) {
   const types = CASE_TYPES.filter((type) => isCaseTypeSelected(value, type));
   if (!types.length) return <span className="muted">None</span>;
-  return <span className="case-pills">{types.map((type) => <span key={type} className="case-pill" title={team[type] ? `${type} handled by ${team[type]}` : `${type}: no team member yet`}>{type}{team[type] && <b> · {team[type]}</b>}</span>)}</span>;
+  return <span className="case-pills">{types.map((type) => <span key={type} className={`case-pill tone-${caseStatusTone(status[type])}`} title={`${type}: ${status[type] || 'Not Started'}${team[type] ? `, handled by ${team[type]}` : ', no team member yet'}`}>{type}{team[type] && <b> · {team[type]}</b>}</span>)}</span>;
+}
+
+// Red / yellow / green status for one client's case.
+function CaseStatusSelect({ value = 'Not Started', onChange, label }) {
+  const options = CASE_STATUSES.includes(value) ? CASE_STATUSES : [...CASE_STATUSES, value];
+  return <span className={`case-status-select tone-${caseStatusTone(value)}`} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+    <i aria-hidden="true" />
+    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={label}>
+      {options.map((status) => <option key={status} value={status}>{status}</option>)}
+    </select>
+    <ChevronDown size={13} aria-hidden="true" />
+  </span>;
 }
 
 // Picks who handles one client's case. Keeps showing a name typed straight into the sheet even if it isn't on the team list.
@@ -1477,7 +1490,12 @@ function CaseClientPicker({ clients, caseType, onAdd }) {
   );
 }
 
-function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, onSetTeamMember, view = 'clients' }) {
+function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, onSetTeamMember, onSetCaseStatus, view = 'clients' }) {
+  // MasterData columns can come and go; only show the ones that have data for someone.
+  const hasFrequency = clients.some((client) => client.frequency);
+  const hasNextContact = clients.some((client) => client.nextContactDate);
+  const hasPayment = clients.some((client) => client.paymentStatus);
+  const [statusFilter, setStatusFilter] = useState('all');
   const [selected, setSelected] = useState(() => new Set());
   const [assigning, setAssigning] = useState(false);
   const [frequency, setFrequency] = useState('All frequencies');
@@ -1511,7 +1529,8 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
     const matchesPayments = view !== 'payments' || client.paymentStatus.toLowerCase() === 'pending';
     const handler = caseType ? client.caseTeam?.[caseType] || '' : '';
     const matchesTeam = !caseType || teamFilter === 'all' || (teamFilter === 'none' ? !handler : handler === teamFilter);
-    return matchesTeam && matchesQuery && matchesFrequency && matchesPayment && matchesCaseType && matchesFollowUps && matchesWeek && matchesPayments;
+    const matchesStatus = !caseType || statusFilter === 'all' || (client.caseStatus?.[caseType] || 'Not Started') === statusFilter;
+    return matchesTeam && matchesStatus && matchesQuery && matchesFrequency && matchesPayment && matchesCaseType && matchesFollowUps && matchesWeek && matchesPayments;
   }).sort((left, right) => {
     if (view === 'follow-ups' || view === 'follow-ups-week') return left.nextContactDate.localeCompare(right.nextContactDate);
     if (sortOrder === 'clientId') {
@@ -1582,14 +1601,15 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
         {dropActive && <div className="drop-banner" aria-hidden="true"><Plus size={16} />Drop to add to {caseType}</div>}
         <div className="roster-toolbar">
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, email or ID" aria-label="Search clients" />{search && <button className="clear-search" onClick={() => onSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
-          <FilterMenu label="Meeting frequency" value={frequency} onChange={setFrequency} icon={SlidersHorizontal} options={[{ value: 'All frequencies', label: 'All frequencies' }, ...frequencies.map((item) => ({ value: item, label: item }))]} />
-          <FilterMenu label="Payment status" value={payment} onChange={setPayment} icon={CreditCard} options={[{ value: 'All payment statuses', label: 'All payment statuses' }, { value: 'Pending', label: 'Pending' }, { value: 'Up to Date', label: 'Up to Date' }]} />
+          {hasFrequency && <FilterMenu label="Meeting frequency" value={frequency} onChange={setFrequency} icon={SlidersHorizontal} options={[{ value: 'All frequencies', label: 'All frequencies' }, ...frequencies.map((item) => ({ value: item, label: item }))]} />}
+          {hasPayment && <FilterMenu label="Payment status" value={payment} onChange={setPayment} icon={CreditCard} options={[{ value: 'All payment statuses', label: 'All payment statuses' }, { value: 'Pending', label: 'Pending' }, { value: 'Up to Date', label: 'Up to Date' }]} />}
+          {caseType && <FilterMenu label="Status" value={statusFilter} onChange={setStatusFilter} icon={Check} options={[{ value: 'all', label: 'All statuses' }, ...CASE_STATUSES.map((status) => ({ value: status, label: status }))]} />}
           {caseType && <FilterMenu label="Team member" value={teamFilter} onChange={setTeamFilter} icon={UserRound} options={[{ value: 'all', label: 'All team members' }, ...TEAM_MEMBERS.map((name) => ({ value: name, label: name })), { value: 'none', label: 'Unassigned' }]} />}
           <FilterMenu label="Sort clients" value={sortOrder} onChange={setSortOrder} icon={ArrowDownAZ} options={[{ value: 'name', label: 'Name A-Z' }, { value: 'clientId', label: 'CL number' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th><th>Case type</th><th>Meeting frequency</th><th>Next contact</th><th>Payment</th>{caseType && <th>Team member</th>}<th aria-label="Open client" /></tr></thead><tbody>
-          {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td><td><CaseTypePills value={client.caseType} team={client.caseTeam} /></td><td>{client.frequency || <span className="muted">Not set</span>}</td><td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td><td><Status value={client.paymentStatus} /></td>{caseType && <td><TeamSelect value={client.caseTeam?.[caseType] || ''} onChange={(member) => onSetTeamMember(client, caseType, member)} label={`Team member for ${client.name}'s ${caseType} case`} /></td>}<td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
-          {!visibleClients.length && <tr><td colSpan={caseType ? 8 : 7}><div className="table-empty">{caseType && !clients.some((client) => isCaseTypeSelected(client.caseType, caseType)) ? <><GripVertical size={22} /><strong>No clients in {caseType} yet</strong><span>Drag clients here from the All clients list on the right.</span></> : <><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></>}</div></td></tr>}
+        <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th>{caseType ? <><th>Status</th><th>Team member</th></> : <th>Case type</th>}{hasFrequency && <th>Meeting frequency</th>}{hasNextContact && <th>Next contact</th>}{hasPayment && <th>Payment</th>}<th aria-label="Open client" /></tr></thead><tbody>
+          {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td>{caseType ? <><td><CaseStatusSelect value={client.caseStatus?.[caseType] || 'Not Started'} onChange={(status) => onSetCaseStatus(client, caseType, status)} label={`Status of ${client.name}'s ${caseType} case`} /></td><td><TeamSelect value={client.caseTeam?.[caseType] || ''} onChange={(member) => onSetTeamMember(client, caseType, member)} label={`Team member for ${client.name}'s ${caseType} case`} /></td></> : <td><CaseTypePills value={client.caseType} team={client.caseTeam} status={client.caseStatus} /></td>}{hasFrequency && <td>{client.frequency || <span className="muted">Not set</span>}</td>}{hasNextContact && <td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td>}{hasPayment && <td><Status value={client.paymentStatus} /></td>}<td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
+          {!visibleClients.length && <tr><td colSpan={3 + (caseType ? 2 : 1) + [hasFrequency, hasNextContact, hasPayment].filter(Boolean).length}><div className="table-empty">{caseType && !clients.some((client) => isCaseTypeSelected(client.caseType, caseType)) ? <><GripVertical size={22} /><strong>No clients in {caseType} yet</strong><span>Drag clients here from the All clients list on the right.</span></> : <><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></>}</div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visibleClients.length} of {clients.length}</span><span><i className="sync-dot" /> Synced from MasterData</span></div>
       </section>
@@ -1854,7 +1874,7 @@ export default function App() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Could not update case types.');
       const confirmed = new Map(result.clients.map((client) => [client.id, client]));
-      setClients((current) => current.map((client) => confirmed.has(client.id) ? { ...client, caseType: confirmed.get(client.id).caseType, caseTeam: confirmed.get(client.id).caseTeam } : client));
+      setClients((current) => current.map((client) => confirmed.has(client.id) ? { ...client, caseType: confirmed.get(client.id).caseType, caseTeam: confirmed.get(client.id).caseTeam, caseStatus: confirmed.get(client.id).caseStatus } : client));
       const who = changing.length === 1 ? changing[0].name : `${changing.length} clients`;
       setToast(add ? `Added ${who} to ${caseType}` : `Removed ${who} from ${caseType}`);
       return true;
@@ -1866,30 +1886,35 @@ export default function App() {
     }
   }
 
-  // Who handles one client's case of one type. Shown at once; put back if the sheet can't be saved.
-  async function setTeamMember(client, caseType, member) {
-    const previous = client.caseTeam?.[caseType] || '';
-    if (previous === member) return;
-    const apply = (value) => {
-      const patch = (item) => item.id === client.id ? { ...item, caseTeam: { ...item.caseTeam, [caseType]: value } } : item;
+  // Saves who handles one client's case (detail 'team') or how far along it is ('status').
+  // Shown at once; put back if the sheet can't be saved.
+  async function setCaseDetail(client, caseType, detail, value) {
+    const field = detail === 'status' ? 'caseStatus' : 'caseTeam';
+    const previous = client[field]?.[caseType] || '';
+    if (previous === value) return;
+    const apply = (next) => {
+      const patch = (item) => item.id === client.id ? { ...item, [field]: { ...item[field], [caseType]: next } } : item;
       setClients((current) => current.map(patch));
       setSelectedClient((current) => current && patch(current));
     };
-    apply(member);
+    apply(value);
     try {
-      const response = await fetch('/api/case-assignments/team', {
+      const response = await fetch(`/api/case-assignments/${detail}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ caseType, clientId: client.id, teamMember: member }),
+        body: JSON.stringify({ caseType, clientId: client.id, [detail === 'status' ? 'status' : 'teamMember']: value }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Could not save the team member.');
-      setToast(member ? `${member} now handles ${client.name}'s ${caseType} case` : `${client.name}'s ${caseType} case is unassigned`);
+      if (!response.ok) throw new Error(result.error || 'Could not save this change.');
+      if (detail === 'status') setToast(`${client.name}'s ${caseType} case: ${value}`);
+      else setToast(value ? `${value} now handles ${client.name}'s ${caseType} case` : `${client.name}'s ${caseType} case is unassigned`);
     } catch (error) {
       apply(previous);
       setCaseError(error.message);
     }
   }
+  const setTeamMember = (client, caseType, member) => setCaseDetail(client, caseType, 'team', member);
+  const setCaseStatus = (client, caseType, status) => setCaseDetail(client, caseType, 'status', status);
 
   function dropOnCaseType(event, caseType) {
     event.preventDefault();
@@ -1924,6 +1949,12 @@ export default function App() {
     : 'Waiting for data';
   const resultView = page.startsWith('results:') ? page.slice('results:'.length) : '';
   const caseCounts = countCaseTypes(clients);
+  // Clicking Clients opens its case-type list and shows All Clients; clicking again folds the list away.
+  const toggleClients = () => {
+    if (clientsOpen) return setClientsOpen(false);
+    setClientsOpen(true);
+    setPage('clients');
+  };
   const inClientsSection = page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates');
   const extraTab = EXTRA_TABS.find((tab) => tab.page === page);
   const showAddClient = page === 'dashboard' || page === 'clients' || Boolean(resultView);
@@ -1939,8 +1970,7 @@ export default function App() {
         <a className="brand" href="/" onClick={(event) => { event.preventDefault(); setPage('dashboard'); }}><img className="brand-mark" src="/logo.png" alt="" width="36" height="36" /><span className="brand-name">BBeckford Law<span>ADMIN PORTAL</span></span></a>
         <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><div className="nav-group">
           <div className="nav-group-head">
-            <button className={`nav-item ${inClientsSection && !clientsOpen ? 'active' : ''} ${inClientsSection ? 'is-current' : ''}`} onClick={() => { setPage('clients'); setClientsOpen(true); }} onDragOver={(event) => { if (isClientDrag(event)) setClientsOpen(true); }}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button>
-            <button className="nav-toggle" type="button" onClick={() => setClientsOpen((open) => !open)} aria-expanded={clientsOpen} aria-controls="nav-client-types" aria-label={clientsOpen ? 'Collapse client case types' : 'Expand client case types'} title={clientsOpen ? 'Collapse' : 'Expand'}>{clientsOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</button>
+            <button className={`nav-item ${inClientsSection && !clientsOpen ? 'active' : ''} ${inClientsSection ? 'is-current' : ''}`} onClick={toggleClients} aria-expanded={clientsOpen} aria-controls="nav-client-types" onDragOver={(event) => { if (isClientDrag(event)) setClientsOpen(true); }}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button>
           </div>
           {clientsOpen && <div className="nav-children" id="nav-client-types">
             <button className={`nav-child ${page === 'clients' ? 'active' : ''}`} onClick={() => setPage('clients')}><span>All Clients</span><span className="nav-count">{clients.length}</span></button>
@@ -1965,7 +1995,7 @@ export default function App() {
           {page === 'dashboard'
             ? <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />
             : page === 'clients'
-              ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} />
+              ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} />
               : page === 'work-permits'
                 ? <WorkPermitList clients={clients} onToast={setToast} />
               : page === 'payments'
@@ -1973,7 +2003,7 @@ export default function App() {
               : page === 'court-dates' || resultView === 'court-dates'
                 ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
                 : resultView
-                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} view={resultView} />
+                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} view={resultView} />
               : page === 'credentials'
                 ? <CredentialsPage onToast={setToast} />
               : extraTab
@@ -1983,7 +2013,7 @@ export default function App() {
         </div>
       </main>
       {intakeOpen && <ClientForm onClose={() => setIntakeOpen(false)} onCreated={createdClient} />}
-      {selectedClient && <ClientDetails client={selectedClient} courtDates={courtDates} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onSetTeamMember={setTeamMember} />}
+      {selectedClient && <ClientDetails client={selectedClient} courtDates={courtDates} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} />}
       {toast && <div className="toast"><span><Check size={15} /></span>{toast}</div>}
     </div>
   );

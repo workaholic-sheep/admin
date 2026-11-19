@@ -11,6 +11,7 @@ import { createWorkbookStore } from './workbook.js';
 import { CaseNotFoundError, CaseSetupError, createCaseAssignments } from './case-assignments.js';
 import { TEAM_MEMBERS } from '../src/team.js';
 import { nameParts } from '../src/names.js';
+import { CASE_STATUSES } from '../src/case-status.js';
 import { createGoogleTabs, createWorkbookTabs } from './sheet-tabs.js';
 import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
 import {
@@ -160,10 +161,16 @@ app.post('/api/clients/:clientId/follow-up/done', async (request, response, next
 });
 
 // A client's case types come from the case tabs, shown as "VAWA + I-485" like the old CaseType value;
-// caseTeam says who handles each one, e.g. { VAWA: 'Kyle', 'I-485': '' }.
+// caseTeam says who handles each one ({ VAWA: 'Kyle' }) and caseStatus how far along it is ({ VAWA: 'Ongoing' }).
 function withCaseTypes(client, assignments) {
   const types = assignments ? CASE_TYPES.filter((type) => assignments[type]?.has(client.id)) : [];
-  return { ...client, caseType: types.join(' + '), caseTeam: Object.fromEntries(types.map((type) => [type, assignments[type].get(client.id) || ''])) };
+  const detail = (type) => assignments[type].get(client.id) || {};
+  return {
+    ...client,
+    caseType: types.join(' + '),
+    caseTeam: Object.fromEntries(types.map((type) => [type, detail(type).teamMember || ''])),
+    caseStatus: Object.fromEntries(types.map((type) => [type, detail(type).status || 'Not Started'])),
+  };
 }
 
 // After an intake or edit: case-type checkboxes go to the case tabs (not MasterData), and the
@@ -218,17 +225,24 @@ app.get('/api/clients', async (_request, response, next) => {
   }
 });
 
-// Which team member handles one client's case of one type. Blank clears it.
-app.put('/api/case-assignments/team', async (request, response, next) => {
+// Per-case details on a case tab: who handles it (blank clears) and its status.
+const CASE_DETAILS = {
+  team: { field: 'Team Member', key: 'teamMember', allowed: (value) => !value || TEAM_MEMBERS.includes(value), error: 'Choose someone from the team list.' },
+  status: { field: 'Status', key: 'status', allowed: (value) => CASE_STATUSES.includes(value), error: 'Choose Not Started, Ongoing or Completed.' },
+};
+
+app.put(['/api/case-assignments/team', '/api/case-assignments/status'], async (request, response, next) => {
+  const detail = CASE_DETAILS[request.path.endsWith('/status') ? 'status' : 'team'];
   const caseType = String(request.body?.caseType || '');
   const clientId = String(request.body?.clientId || '');
-  const teamMember = String(request.body?.teamMember || '').trim();
+  const value = String(request.body?.[detail.key] || '').trim();
   if (!CASE_TYPES.includes(caseType)) return response.status(400).json({ error: 'Choose a valid case type.' });
   if (!clientId) return response.status(400).json({ error: 'Choose a client.' });
-  if (teamMember && !TEAM_MEMBERS.includes(teamMember)) return response.status(400).json({ error: 'Choose someone from the team list.' });
+  if (!detail.allowed(value)) return response.status(400).json({ error: detail.error });
   try {
-    const assignments = await cases.setTeamMember(caseType, clientId, teamMember);
-    response.json({ caseType, clientId, teamMember, caseTeam: withCaseTypes({ id: clientId }, assignments).caseTeam });
+    const assignments = await cases.setCaseDetail(caseType, clientId, detail.field, value);
+    const client = withCaseTypes({ id: clientId }, assignments);
+    response.json({ caseType, clientId, caseTeam: client.caseTeam, caseStatus: client.caseStatus });
   } catch (error) {
     if (error instanceof CaseNotFoundError) return response.status(404).json({ error: error.message });
     if (error instanceof CaseSetupError) return response.status(503).json({ error: error.message });
