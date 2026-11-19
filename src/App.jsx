@@ -1431,6 +1431,52 @@ function TeamSelect({ value = '', onChange, label, disabled = false }) {
   </span>;
 }
 
+const PICKER_LIMIT = 200;
+
+// Right-hand panel on a case page: every client not yet in this case, ready to drag into the list.
+function CaseClientPicker({ clients, caseType, onAdd }) {
+  const [query, setQuery] = useState('');
+  const [adding, setAdding] = useState('');
+  const text = query.trim().toLowerCase();
+  const available = clients
+    .filter((client) => client.id && !isCaseTypeSelected(client.caseType, caseType))
+    .filter((client) => !text || [client.name, client.id, client.email].some((value) => String(value || '').toLowerCase().includes(text)))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const shown = available.slice(0, PICKER_LIMIT);
+
+  function startDrag(event, client) {
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData(CLIENT_DRAG_TYPE, JSON.stringify([client.id]));
+    event.dataTransfer.setData('text/plain', client.name);
+    setDragLabel(event, client.name);
+  }
+
+  async function add(client) {
+    setAdding(client.id);
+    try { await onAdd([client.id]); } finally { setAdding(''); }
+  }
+
+  return (
+    <aside className="surface case-picker" aria-label={`Clients to add to ${caseType}`}>
+      <div className="case-picker-head">
+        <div><h2>All clients</h2><span>{available.length} not in {caseType}</span></div>
+      </div>
+      <label className="search-box case-picker-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, ID or email" aria-label="Search all clients" />{query && <button className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button>}</label>
+      <p className="case-picker-hint"><GripVertical size={13} />Drag a client into the {caseType} list, or press +.</p>
+      <ul className="case-picker-list">
+        {shown.map((client) => <li key={client.id} draggable onDragStart={(event) => startDrag(event, client)} title={`Drag ${client.name} into ${caseType}`}>
+          <GripVertical size={14} className="drag-grip" aria-hidden="true" />
+          <span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span>
+          <span className="case-picker-name"><strong>{client.name}</strong><small>{client.id}{client.caseType ? ` · ${client.caseType}` : ''}</small></span>
+          <button className="icon-button" type="button" onClick={() => add(client)} disabled={adding === client.id} aria-label={`Add ${client.name} to ${caseType}`} title={`Add to ${caseType}`}>{adding === client.id ? <LoaderCircle size={14} className="spin" /> : <Plus size={14} />}</button>
+        </li>)}
+        {!shown.length && <li className="case-picker-empty">{text ? 'No matching clients.' : `Every client is already in ${caseType}.`}</li>}
+      </ul>
+      {available.length > PICKER_LIMIT && <p className="case-picker-more">Showing the first {PICKER_LIMIT} of {available.length}. Search to find others.</p>}
+    </aside>
+  );
+}
+
 function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, onSetTeamMember, view = 'clients' }) {
   const [selected, setSelected] = useState(() => new Set());
   const [assigning, setAssigning] = useState(false);
@@ -1438,6 +1484,12 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
   const [payment, setPayment] = useState('All payment statuses');
   const [sortOrder, setSortOrder] = useState('name');
   const [teamFilter, setTeamFilter] = useState('all');
+  const [dropActive, setDropActive] = useState(false);
+  useEffect(() => {
+    const clear = () => setDropActive(false);
+    window.addEventListener('dragend', clear);
+    return () => window.removeEventListener('dragend', clear);
+  }, []);
   const today = centralDateKey();
   const caseType = view.startsWith('case:') ? view.slice('case:'.length) : '';
   const titles = {
@@ -1490,6 +1542,15 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
     }
   }
 
+  // Drops from the All clients panel. Rows dragged within this list are already in the case, so they're ignored.
+  function dropIntoCase(event) {
+    event.preventDefault();
+    setDropActive(false);
+    const inCase = new Set(clients.filter((client) => isCaseTypeSelected(client.caseType, caseType)).map((client) => client.id));
+    const ids = clientIdsFromDrag(event).filter((id) => !inCase.has(id));
+    if (ids.length) assign(ids, caseType, true);
+  }
+
   function startDrag(event, client) {
     // Dragging a ticked row carries every ticked client; otherwise just this one.
     const ids = selected.has(client.id) ? [...selected] : [client.id];
@@ -1510,8 +1571,15 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
           <button className="text-button" type="button" onClick={() => setSelected(new Set())}>Clear selection</button>
           <span className="selection-hint">or drag them onto a case type in the sidebar</span>
         </div>
-        : <p className="drag-hint"><GripVertical size={14} />Tip: drag a client onto a case type in the sidebar, or tick several and drag them together.</p>}
-      <section className="surface roster-surface">
+        : <p className="drag-hint"><GripVertical size={14} />{caseType ? `Drag clients from the All clients list on the right into this list to add them to ${caseType}.` : 'Tip: drag a client onto a case type in the sidebar, or tick several and drag them together.'}</p>}
+      <div className={caseType ? 'case-layout' : undefined}>
+      <section
+        className={`surface roster-surface ${dropActive ? 'is-drop-active' : ''}`}
+        onDragOver={caseType ? (event) => { if (!isClientDrag(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; if (!dropActive) setDropActive(true); } : undefined}
+        onDragLeave={caseType ? (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropActive(false); } : undefined}
+        onDrop={caseType ? dropIntoCase : undefined}
+      >
+        {dropActive && <div className="drop-banner" aria-hidden="true"><Plus size={16} />Drop to add to {caseType}</div>}
         <div className="roster-toolbar">
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search name, email or ID" aria-label="Search clients" />{search && <button className="clear-search" onClick={() => onSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
           <FilterMenu label="Meeting frequency" value={frequency} onChange={setFrequency} icon={SlidersHorizontal} options={[{ value: 'All frequencies', label: 'All frequencies' }, ...frequencies.map((item) => ({ value: item, label: item }))]} />
@@ -1521,10 +1589,12 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
         </div>
         <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th><th>Case type</th><th>Meeting frequency</th><th>Next contact</th><th>Payment</th>{caseType && <th>Team member</th>}<th aria-label="Open client" /></tr></thead><tbody>
           {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td><td><CaseTypePills value={client.caseType} team={client.caseTeam} /></td><td>{client.frequency || <span className="muted">Not set</span>}</td><td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td><td><Status value={client.paymentStatus} /></td>{caseType && <td><TeamSelect value={client.caseTeam?.[caseType] || ''} onChange={(member) => onSetTeamMember(client, caseType, member)} label={`Team member for ${client.name}'s ${caseType} case`} /></td>}<td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
-          {!visibleClients.length && <tr><td colSpan={caseType ? 8 : 7}><div className="table-empty"><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></div></td></tr>}
+          {!visibleClients.length && <tr><td colSpan={caseType ? 8 : 7}><div className="table-empty">{caseType && !clients.some((client) => isCaseTypeSelected(client.caseType, caseType)) ? <><GripVertical size={22} /><strong>No clients in {caseType} yet</strong><span>Drag clients here from the All clients list on the right.</span></> : <><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></>}</div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visibleClients.length} of {clients.length}</span><span><i className="sync-dot" /> Synced from MasterData</span></div>
       </section>
+      {caseType && <CaseClientPicker clients={clients} caseType={caseType} onAdd={(ids) => assign(ids, caseType, true)} />}
+      </div>
     </>
   );
 }
