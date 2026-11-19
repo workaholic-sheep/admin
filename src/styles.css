@@ -987,3 +987,7 @@ body { font-size: var(--type-body); }
 [data-theme="dark"] .schedule-main a { color: #93c1ea; }
 [data-theme="dark"] .link-button { color: var(--d-accent); }
 [data-theme="dark"] .schedule-status option { background: var(--d-surface); color: var(--d-text); }
+
+/* Keep each label and its box at the top of the row, even when the field next to it is taller
+   (e.g. the password box with its "Generate" link), so the boxes line up. */
+.field { align-content: start; }

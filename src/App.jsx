@@ -670,8 +670,23 @@ function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember,
   );
 }
 
-function Dashboard({ clients, courtDates, onShowClients, onShowResults, onSelectClient, onCompleteFollowUp, now }) {
+function Dashboard({ clients, courtDates, onShowClients, onShowResults, onShowSchedule, onSelectClient, onCompleteFollowUp, now }) {
   const today = centralDateKey(now);
+  const [appointments, setAppointments] = useState([]);
+  useEffect(() => {
+    let active = true;
+    fetch('/api/schedule')
+      .then((response) => (response.ok ? response.json() : { entries: [] }))
+      .then((result) => { if (active) setAppointments(result.entries || []); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+  // Next appointment still to come today or later (Central Time), skipping done and cancelled ones.
+  const nowTime = centralNowTime();
+  const upcomingAppointments = appointments
+    .filter((entry) => entry.status === 'Scheduled' && (entry.date > today || (entry.date === today && (timeTo24h(entry.time) || '23:59') >= nowTime)))
+    .sort((left, right) => `${left.date} ${timeTo24h(left.time)}`.localeCompare(`${right.date} ${timeTo24h(right.time)}`));
+  const nextAppointment = upcomingAppointments[0] || null;
   const dueClients = useMemo(() => clients
     .map((client) => ({ ...client, dueIn: daysUntil(client.nextContactDate, today) }))
     .filter((client) => client.dueIn !== null && client.dueIn >= 0)
@@ -679,7 +694,6 @@ function Dashboard({ clients, courtDates, onShowClients, onShowResults, onSelect
   const dueSoon = dueClients.filter((client) => client.dueIn <= 7).length;
   const pendingPayments = clients.filter((client) => client.paymentStatus.toLowerCase() === 'pending').length;
   const caseTypeCounts = countCaseTypes(clients);
-  const nextFollowUp = dueClients.find((client) => client.dueIn >= 0) || null;
   const rosterNames = new Set(clients.map((client) => normalizeClientName(client.name)));
   const nextCourtDate = courtDates
     .filter((event) => rosterNames.has(normalizeClientName(event.clientName)) && event.status.toLowerCase() !== 'done')
@@ -699,7 +713,7 @@ function Dashboard({ clients, courtDates, onShowClients, onShowResults, onSelect
     <>
       <div className="welcome-row"><div><span className="eyebrow">{new Intl.DateTimeFormat('en-US', { timeZone: CENTRAL_TIME_ZONE, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(now).toUpperCase()}</span><h1>{greeting(now)}.</h1><p className="page-subtitle">Here’s the client overview.</p></div><button className="button button-secondary" onClick={onShowClients}>View all clients <ArrowRight size={16} /></button></div>
       <div className="metric-grid">
-        <Metric label="Next follow-up" value={nextFollowUp ? formatDate(nextFollowUp.nextContactDate, { month: 'short', day: 'numeric' }) : '—'} note={nextFollowUp?.name || 'No upcoming follow-up'} tone="blue" icon={CalendarClock} featured onClick={() => onShowResults('follow-ups')} />
+        <Metric label="Schedules" value={nextAppointment ? `${nextAppointment.date === today ? 'Today' : formatDate(nextAppointment.date, { month: 'short', day: 'numeric' })} · ${nextAppointment.time}` : '—'} note={nextAppointment ? [nextAppointment.mode, nextAppointment.purpose, nextAppointment.clientName].filter(Boolean).join(' · ') + (upcomingAppointments.length > 1 ? ` (+${upcomingAppointments.length - 1} more)` : '') : 'No upcoming appointments'} tone="blue" icon={CalendarClock} featured onClick={onShowSchedule} />
         <Metric label="Next court date" value={nextCourtDate ? formatDate(nextCourtDate.date, { month: 'short', day: 'numeric' }) : '—'} note={nextCourtDate?.clientName || 'No upcoming court date'} tone="green" icon={CalendarDays} featured onClick={() => onShowResults('court-dates')} />
         <Metric label="Total clients" value={clients.length} note="In MasterData" tone="green" icon={UsersRound} onClick={() => onShowResults('clients')} />
         <Metric label="Upcoming this week" value={dueSoon} note="Scheduled in the next 7 days" tone="amber" icon={CalendarClock} onClick={() => onShowResults('follow-ups-week')} />
@@ -1231,7 +1245,7 @@ function siteHost(url) {
   try { return new URL(url).host.replace(/^www\./, ''); } catch { return ''; }
 }
 
-const emptyAppointment = { date: '', time: '', mode: 'Zoom', location: '', purpose: '', clientId: '', clientName: '', caseType: '', addedBy: '', status: 'Scheduled' };
+const emptyAppointment = { date: '', time: '', mode: 'Zoom', location: '', purpose: '', clientId: '', clientName: '', caseType: '', caseOther: '', addedBy: '', status: 'Scheduled' };
 const MODE_TONES = { Zoom: 'zoom', 'In Person': 'person', 'Phone Call': 'phone' };
 
 function centralNowTime() {
@@ -1244,6 +1258,11 @@ function dayLabel(date, today) {
   if (date === today) return 'Today';
   if (date === tomorrow.toISOString().slice(0, 10)) return 'Tomorrow';
   return new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`));
+}
+
+// Opens the browser's date/time picker when the box is clicked anywhere, not only on its icon.
+function openPicker(event) {
+  try { event.currentTarget.showPicker?.(); } catch { /* picker already open or not supported */ }
 }
 
 const isWebLink = (value) => /^https?:\/\//i.test(String(value || '').trim());
@@ -1283,7 +1302,7 @@ function SchedulePage({ clients, onSelectClient, onToast }) {
     let author = '';
     try { author = localStorage.getItem('note-author') || ''; } catch { /* no saved choice */ }
     setForm(entry
-      ? { ...emptyAppointment, ...entry, time: timeTo24h(entry.time) }
+      ? { ...emptyAppointment, ...entry, time: timeTo24h(entry.time), ...(entry.caseType && !CASE_TYPES.includes(entry.caseType) ? { caseType: 'Other', caseOther: entry.caseType } : {}) }
       : { ...emptyAppointment, date: today, addedBy: SCHEDULE_ADDED_BY.includes(author) ? author : '' });
     setFormError('');
   }
@@ -1312,7 +1331,9 @@ function SchedulePage({ clients, onSelectClient, onToast }) {
     setSaving(true);
     setFormError('');
     try {
-      const entry = await send(editing, form);
+      // "Other" saves the reason typed in its place.
+      const { caseOther, ...values } = form;
+      const entry = await send(editing, { ...values, caseType: form.caseType === 'Other' ? caseOther.trim() : form.caseType });
       try { localStorage.setItem('note-author', form.addedBy); } catch { /* remembered for this visit only */ }
       onToast(`${editing === 'new' ? 'Scheduled' : 'Updated'}: ${entry.purpose}, ${formatDate(entry.date)} ${entry.time} CT`);
       setEditing(null);
@@ -1371,13 +1392,14 @@ function SchedulePage({ clients, onSelectClient, onToast }) {
       <div className="welcome-row roster-heading"><div><span className="eyebrow">ATTORNEY SCHEDULE · {upcomingCount} UPCOMING · CENTRAL TIME</span><h1>Schedule</h1><p className="page-subtitle">Appointments for the attorney, with how each one will happen.</p></div><button className="button button-primary" onClick={() => startEdit(null)} disabled={loadState !== 'ready'}><Plus size={16} />Add appointment</button></div>
       {editing && <form className="surface reminder-form" onSubmit={save}>
         <div className="form-grid">
-          <label className="field">Date<input type="date" name="date" value={form.date} onChange={update} required autoFocus /></label>
-          <label className="field">Time (Central)<input type="time" name="time" value={form.time} onChange={update} required step={300} /></label>
+          <label className="field">Date<input type="date" name="date" value={form.date} onChange={update} onClick={openPicker} required autoFocus /></label>
+          <label className="field">Time (Central)<input type="time" name="time" value={form.time} onChange={update} onClick={openPicker} required step={300} /></label>
           <fieldset className="case-type-picker field-wide"><legend>Mode of communication</legend><div className="case-type-options">{SCHEDULE_MODES.map((mode) => <label key={mode} className={`case-type-option ${form.mode === mode ? 'selected' : ''}`}><input type="radio" name="mode" value={mode} checked={form.mode === mode} onChange={update} />{mode}</label>)}</div></fieldset>
           <label className="field field-wide">{form.mode === 'Zoom' ? 'Zoom link' : form.mode === 'In Person' ? 'Location' : 'Phone number'}<input name="location" value={form.location} onChange={update} maxLength={500} placeholder={form.mode === 'Zoom' ? 'https://zoom.us/j/…' : form.mode === 'In Person' ? 'Office, courthouse or address' : 'Number to call'} /></label>
           <label className="field field-wide">Purpose<b>*</b><input name="purpose" value={form.purpose} onChange={update} maxLength={300} required placeholder="e.g. VAWA intake consultation" /></label>
           <label className="field">Client (optional)<NameSuggest required={false} autoFocus={false} value={form.clientName} clients={clients} onChange={(name) => setForm((current) => ({ ...current, clientName: name, clientId: '', caseType: '' }))} onPick={(client) => setForm((current) => ({ ...current, clientName: client.name, clientId: client.id, caseType: '' }))} /></label>
-          <label className="field">Case (optional)<select name="caseType" value={form.caseType} onChange={update}><option value="">None</option>{clientCases.map((type) => <option key={type}>{type}</option>)}</select><ChevronDown size={15} /></label>
+          <label className="field">Case (optional)<select name="caseType" value={form.caseType} onChange={update}><option value="">None</option>{clientCases.map((type) => <option key={type}>{type}</option>)}<option value="Other">Other</option></select><ChevronDown size={15} /></label>
+          {form.caseType === 'Other' && <label className="field">Other reason<b>*</b><input name="caseOther" value={form.caseOther} onChange={update} maxLength={100} required autoFocus placeholder="e.g. Bond hearing, FOIA request" /></label>}
           <label className="field">Added by<select name="addedBy" value={form.addedBy} onChange={update} required><option value="" disabled>Choose…</option>{SCHEDULE_ADDED_BY.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
           {editing !== 'new' && <label className="field">Status<select name="status" value={form.status} onChange={update}>{SCHEDULE_STATUSES.map((status) => <option key={status}>{status}</option>)}</select><ChevronDown size={15} /></label>}
         </div>
@@ -2297,7 +2319,7 @@ export default function App() {
               title={`Show ${type} clients, or drop clients here to add them to ${type}`}
             ><span>{type}</span><span className="nav-count">{caseCounts[type]}</span></button>)}
           </div>}
-        </div><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'schedule' ? 'active' : ''}`} onClick={() => setPage('schedule')}><CalendarClock size={18} /><span>Schedule</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
+        </div><button className={`nav-item ${page === 'schedule' ? 'active' : ''}`} onClick={() => setPage('schedule')}><CalendarClock size={18} /><span>Schedule</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
       <main className="main-area">
@@ -2306,7 +2328,7 @@ export default function App() {
           {loadError && <div className="load-error" role="alert"><span>{loadError}</span><button onClick={refreshWorkbook}>Retry <RefreshCw size={14} /></button></div>}
           {caseError && <div className="load-error" role="alert"><span>{caseError}</span><button onClick={() => setCaseError('')}>Dismiss <X size={14} /></button></div>}
           {page === 'dashboard'
-            ? <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />
+            ? <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onShowSchedule={() => setPage('schedule')} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />
             : page === 'clients'
               ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} />
               : page === 'work-permits'
@@ -2323,7 +2345,7 @@ export default function App() {
                 ? <CredentialsPage onToast={setToast} />
               : extraTab
                 ? <ComingSoon key={extraTab.page} title={extraTab.label} icon={extraTab.icon} />
-              : <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />}
+              : <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onShowSchedule={() => setPage('schedule')} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />}
           <footer className="page-footer"><span><i className="sync-dot" /> {dataSource} connection active</span><span>{dataSource === 'Google Sheets' ? 'Sheet checked every 20 seconds' : 'Workbook checked every 20 seconds'}</span></footer>
         </div>
       </main>

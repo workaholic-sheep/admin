@@ -1,4 +1,3 @@
-import { CASE_TYPES } from '../src/case-types.js';
 import { SCHEDULE_ADDED_BY } from '../src/team.js';
 import { SCHEDULE_MODES, SCHEDULE_STATUSES, timeFrom24h, timeTo24h } from '../src/schedule.js';
 import { centralTimestamp } from './case-assignments.js';
@@ -93,7 +92,8 @@ export function scheduleInput(body, clients) {
   if (purpose.length > 300) throw new ScheduleError('Purpose must be 300 characters or fewer.');
   if (location.length > 500) throw new ScheduleError('Link or location must be 500 characters or fewer.');
   const caseType = String(input.caseType ?? '').trim();
-  if (caseType && !CASE_TYPES.includes(caseType)) throw new ScheduleError('Choose a valid case type.');
+  // A case type from the list, or the reason typed after choosing "Other".
+  if (caseType.length > 100) throw new ScheduleError('The other reason must be 100 characters or fewer.');
   const clientId = String(input.clientId ?? '').trim();
   const client = clientId ? clients.find((item) => item.id === clientId) : null;
   if (clientId && !client) throw new ScheduleError('That client was not found.', 404);
