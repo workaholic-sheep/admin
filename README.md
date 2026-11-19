@@ -56,6 +56,8 @@ The `.gitignore` excludes Excel workbooks, dependencies, build output, and envir
 	- `GOOGLE_COURT_SHEET_NAME` = `COURT DATE LIST`
 	- `APP_PASSWORD` = a strong private workspace password
 	- `SESSION_SECRET` = a separate random secret used to sign sessions
+	- `CREDENTIALS_KEY` = a random secret that encrypts passwords in the Credentials tab. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. Keep a copy somewhere safe: if it is lost or changed, saved passwords can no longer be read.
+	- `GOOGLE_CREDENTIALS_SHEET_ID` (optional) = a separate spreadsheet for saved logins; without it, a `Credentials` tab is created in the client spreadsheet
 3. Redeploy after saving the environment variables. The app requires sign-in and refuses to serve the bundled Excel workbook in production.
 
 `GOOGLE_COURT_SHEET_ID` is required because the court report is in a separate spreadsheet.

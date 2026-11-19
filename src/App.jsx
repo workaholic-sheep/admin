@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ClipboardList,
   Clock3,
+  Copy,
   FileCheck2,
   FileText,
   CreditCard,
@@ -53,12 +54,12 @@ const frequencies = [
 
 const CENTRAL_TIME_ZONE = 'America/Chicago';
 
-// Tabs that don't have their own screen yet; each shows a "Coming soon" page.
-const PLACEHOLDER_TABS = [
+// Extra sidebar tabs. Those without `built: true` show a "Coming soon" page for now.
+const EXTRA_TABS = [
   { page: 'pdf', label: 'PDF', icon: FileText },
   { page: 'asylum', label: 'Asylum', icon: Globe },
   { page: 'forms', label: 'Forms', icon: ClipboardList },
-  { page: 'credentials', label: 'Credentials', icon: KeyRound },
+  { page: 'credentials', label: 'Credentials', icon: KeyRound, built: true },
 ];
 
 function useTheme() {
@@ -1147,6 +1148,209 @@ function WorkPermitList({ clients = [], onToast }) {
   );
 }
 
+const emptyCredential = { website: '', url: '', username: '', password: '', notes: '' };
+const REVEAL_SECONDS = 30;
+
+// Strong random password from the browser's secure generator; avoids look-alike characters.
+function generatePassword(length = 18) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*-_=+?';
+  const limit = 256 - (256 % alphabet.length);
+  let password = '';
+  while (password.length < length) {
+    const bytes = crypto.getRandomValues(new Uint8Array(length * 2));
+    for (const byte of bytes) if (byte < limit && password.length < length) password += alphabet[byte % alphabet.length];
+  }
+  return password;
+}
+
+function siteHost(url) {
+  try { return new URL(url).host.replace(/^www\./, ''); } catch { return ''; }
+}
+
+function CredentialsPage({ onToast }) {
+  const [records, setRecords] = useState([]);
+  const [loadState, setLoadState] = useState('loading');
+  const [loadError, setLoadError] = useState('');
+  const [search, setSearch] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState(emptyCredential);
+  const [showFormPassword, setShowFormPassword] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [revealed, setRevealed] = useState({});
+  const [busyId, setBusyId] = useState('');
+  const [rowError, setRowError] = useState('');
+  const hideTimers = useRef({});
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/credentials')
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load credentials.');
+        if (active) { setRecords(result.credentials || []); setLoadState('ready'); }
+      })
+      .catch((error) => { if (active) { setLoadError(error.message); setLoadState('error'); } });
+    const timers = hideTimers.current;
+    return () => { active = false; Object.values(timers).forEach(window.clearTimeout); };
+  }, []);
+
+  function hide(id) {
+    window.clearTimeout(hideTimers.current[id]);
+    setRevealed(({ [id]: _removed, ...rest }) => rest);
+  }
+
+  async function fetchPassword(record) {
+    const response = await fetch(`/api/credentials/${encodeURIComponent(record.id)}/reveal`, { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not read this password.');
+    return result.password;
+  }
+
+  async function toggleReveal(record) {
+    if (revealed[record.id] !== undefined) return hide(record.id);
+    setBusyId(record.id);
+    setRowError('');
+    try {
+      const password = await fetchPassword(record);
+      setRevealed((current) => ({ ...current, [record.id]: password }));
+      // Shown passwords hide themselves so they aren't left on an unattended screen.
+      hideTimers.current[record.id] = window.setTimeout(() => hide(record.id), REVEAL_SECONDS * 1000);
+    } catch (error) {
+      setRowError(error.message);
+    } finally {
+      setBusyId('');
+    }
+  }
+
+  async function copy(text, label) {
+    try {
+      await navigator.clipboard.writeText(text);
+      onToast(`${label} copied`);
+    } catch {
+      setRowError('Your browser blocked copying. Use Show and copy it by hand.');
+    }
+  }
+
+  async function copyPassword(record) {
+    setBusyId(record.id);
+    setRowError('');
+    try {
+      await copy(revealed[record.id] ?? await fetchPassword(record), `${record.website} password`);
+    } catch (error) {
+      setRowError(error.message);
+    } finally {
+      setBusyId('');
+    }
+  }
+
+  function startEdit(record) {
+    setEditing(record ? record.id : 'new');
+    setForm(record ? { ...emptyCredential, website: record.website, url: record.url, username: record.username, notes: record.notes } : emptyCredential);
+    setShowFormPassword(false);
+    setFormError('');
+  }
+
+  const update = (event) => setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setFormError('');
+    try {
+      const isNew = editing === 'new';
+      const response = await fetch(isNew ? '/api/credentials' : `/api/credentials/${encodeURIComponent(editing)}`, {
+        method: isNew ? 'POST' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not save this login.');
+      setRecords((current) => isNew ? [...current, result.credential] : current.map((item) => item.id === result.credential.id ? result.credential : item));
+      if (!isNew) hide(result.credential.id);
+      setEditing(null);
+      setForm(emptyCredential);
+      onToast(`${result.credential.website} ${isNew ? 'saved' : 'updated'}`);
+    } catch (error) {
+      setFormError(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(record) {
+    if (!window.confirm(`Delete the saved login for ${record.website}? This cannot be undone.`)) return;
+    setBusyId(record.id);
+    setRowError('');
+    try {
+      const response = await fetch(`/api/credentials/${encodeURIComponent(record.id)}`, { method: 'DELETE' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not delete this login.');
+      hide(record.id);
+      setRecords((current) => current.filter((item) => item.id !== record.id));
+      if (editing === record.id) setEditing(null);
+      onToast(`${record.website} deleted`);
+    } catch (error) {
+      setRowError(error.message);
+    } finally {
+      setBusyId('');
+    }
+  }
+
+  const query = search.trim().toLowerCase();
+  const visible = records
+    .filter((record) => !query || [record.website, record.url, record.username, record.notes].some((value) => value.toLowerCase().includes(query)))
+    .sort((left, right) => left.website.localeCompare(right.website));
+  const empty = loadState === 'loading' ? ['Loading saved logins…', '']
+    : loadState === 'error' ? ['Could not load saved logins', loadError]
+      : !records.length ? ['No saved logins yet', 'Use “Add website” to save the first one.']
+        : ['No matching logins', 'Try a different search.'];
+
+  return (
+    <>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">CREDENTIALS · {records.length} SAVED</span><h1>Password manager</h1><p className="page-subtitle">Shared website logins for staff. Passwords are encrypted and only shown when you ask.</p></div><button className="button button-primary" onClick={() => startEdit(null)} disabled={loadState !== 'ready'}><Plus size={16} />Add website</button></div>
+      {editing && <form className="surface reminder-form" onSubmit={save} autoComplete="off">
+        <div className="form-grid">
+          <label className="field">Website name<b>*</b><input name="website" value={form.website} onChange={update} maxLength={100} placeholder="e.g. USCIS online account" required autoFocus /></label>
+          <label className="field">Website address<input name="url" value={form.url} onChange={update} maxLength={300} placeholder="e.g. myaccount.uscis.gov" inputMode="url" /></label>
+          <label className="field">Username or email<input name="username" value={form.username} onChange={update} maxLength={200} autoComplete="off" /></label>
+          <label className="field">Password{editing === 'new' && <b>*</b>}
+            <span className="password-input credential-password-input">
+              <input name="password" type={showFormPassword ? 'text' : 'password'} value={form.password} onChange={update} maxLength={500} autoComplete="new-password" required={editing === 'new'} placeholder={editing === 'new' ? '' : 'Leave blank to keep the current password'} />
+              <button className="password-toggle" type="button" onClick={() => setShowFormPassword((shown) => !shown)} aria-label={showFormPassword ? 'Hide password' : 'Show password'} aria-pressed={showFormPassword} title={showFormPassword ? 'Hide password' : 'Show password'}>{showFormPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+            </span>
+            <button className="text-button credential-generate" type="button" onClick={() => { setForm((current) => ({ ...current, password: generatePassword() })); setShowFormPassword(true); }}><RefreshCw size={13} />Generate a strong password</button>
+          </label>
+          <label className="field field-wide">Notes<textarea name="notes" value={form.notes} onChange={update} rows={2} maxLength={1000} placeholder="Security questions, who owns the account, PIN hints…" /></label>
+        </div>
+        {formError && <div className="form-error" role="alert">{formError}</div>}
+        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setEditing(null)}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : editing === 'new' ? 'Save login' : 'Save changes'}</button></div>
+      </form>}
+      {rowError && <div className="load-error" role="alert"><span>{rowError}</span><button onClick={() => setRowError('')}>Dismiss <X size={14} /></button></div>}
+      <section className="surface roster-surface">
+        <div className="roster-toolbar">
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search website, username or notes" aria-label="Search saved logins" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+        </div>
+        <div className="table-scroll"><table className="client-table credential-table"><thead><tr><th>Website</th><th>Username</th><th>Password</th><th>Updated</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>
+          {visible.map((record) => {
+            const shown = revealed[record.id];
+            const busy = busyId === record.id;
+            return <tr key={record.id} className="row-static">
+              <td><strong>{record.website}</strong>{record.url && <a className="credential-link" href={record.url} target="_blank" rel="noopener noreferrer">{siteHost(record.url) || record.url}</a>}{record.notes && <small className="credential-notes">{record.notes}</small>}</td>
+              <td>{record.username ? <span className="credential-value"><span>{record.username}</span><button className="icon-button" onClick={() => copy(record.username, `${record.website} username`)} aria-label={`Copy username for ${record.website}`} title="Copy username"><Copy size={14} /></button></span> : <span className="muted">—</span>}</td>
+              <td>{record.hasPassword ? <span className="credential-value"><code className={shown !== undefined ? 'is-shown' : ''}>{shown !== undefined ? shown : '••••••••••'}</code><button className="icon-button" onClick={() => toggleReveal(record)} disabled={busy} aria-label={`${shown !== undefined ? 'Hide' : 'Show'} password for ${record.website}`} title={shown !== undefined ? 'Hide' : `Show for ${REVEAL_SECONDS} seconds`}>{shown !== undefined ? <EyeOff size={14} /> : <Eye size={14} />}</button><button className="icon-button" onClick={() => copyPassword(record)} disabled={busy} aria-label={`Copy password for ${record.website}`} title="Copy password"><Copy size={14} /></button></span> : <span className="muted">—</span>}</td>
+              <td>{record.updatedAt ? formatDate(record.updatedAt.slice(0, 10)) : <span className="muted">—</span>}</td>
+              <td><span className="credential-actions"><button className="icon-button" onClick={() => startEdit(record)} disabled={busy} aria-label={`Edit login for ${record.website}`} title="Edit"><Pencil size={14} /></button><button className="icon-button button-remove" onClick={() => remove(record)} disabled={busy} aria-label={`Delete login for ${record.website}`} title="Delete"><Trash2 size={14} /></button></span></td>
+            </tr>;
+          })}
+          {!visible.length && <tr><td colSpan="5"><div className="table-empty"><KeyRound size={22} /><strong>{empty[0]}</strong>{empty[1] && <span>{empty[1]}</span>}</div></td></tr>}
+        </tbody></table></div>
+        <div className="table-foot"><span>Showing {visible.length} of {records.length} logins</span><span><ShieldCheck size={13} /> Passwords encrypted at rest</span></div>
+      </section>
+    </>
+  );
+}
+
 function ClientList({ clients, search, onSearch, onSelectClient, view = 'clients' }) {
   const [frequency, setFrequency] = useState('All frequencies');
   const [payment, setPayment] = useState('All payment statuses');
@@ -1442,9 +1646,9 @@ export default function App() {
     ? `Synced ${new Intl.DateTimeFormat('en-US', { timeZone: CENTRAL_TIME_ZONE, hour: 'numeric', minute: '2-digit' }).format(new Date(lastUpdated))} CT`
     : 'Waiting for data';
   const resultView = page.startsWith('results:') ? page.slice('results:'.length) : '';
-  const placeholderTab = PLACEHOLDER_TABS.find((tab) => tab.page === page);
+  const extraTab = EXTRA_TABS.find((tab) => tab.page === page);
   const showAddClient = page === 'dashboard' || page === 'clients' || Boolean(resultView);
-  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit' })[page] || placeholderTab?.label
+  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit' })[page] || extraTab?.label
     || (resultView === 'court-dates' ? 'Court dates' : resultView.startsWith('case:') ? `${resultView.slice('case:'.length)} clients` : ({ payments: 'Payment list', 'follow-ups': 'Upcoming follow-ups', 'follow-ups-week': 'Follow-ups this week', clients: 'Client roster' })[resultView])
     || 'Overview';
   if (authStatus === 'checking') return <main className="login-screen"><img className="login-mark" src="/logo.png" alt="Loading" width="48" height="48" /></main>;
@@ -1454,7 +1658,7 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="/" onClick={(event) => { event.preventDefault(); setPage('dashboard'); }}><img className="brand-mark" src="/logo.png" alt="" width="36" height="36" /><span className="brand-name">BBeckford Law<span>ADMIN PORTAL</span></span></a>
-        <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><button className={`nav-item ${page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates') ? 'active' : ''}`} onClick={() => setPage('clients')}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{PLACEHOLDER_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
+        <div className="sidebar-section"><span className="nav-caption">WORKSPACE</span><button className={`nav-item ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}><LayoutDashboard size={18} /><span>Overview</span></button><button className={`nav-item ${page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates') ? 'active' : ''}`} onClick={() => setPage('clients')}><UsersRound size={18} /><span>Clients</span><span className="nav-count">{clients.length}</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
       <main className="main-area">
@@ -1473,8 +1677,10 @@ export default function App() {
                 ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
                 : resultView
                   ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} view={resultView} />
-              : placeholderTab
-                ? <ComingSoon key={placeholderTab.page} title={placeholderTab.label} icon={placeholderTab.icon} />
+              : page === 'credentials'
+                ? <CredentialsPage onToast={setToast} />
+              : extraTab
+                ? <ComingSoon key={extraTab.page} title={extraTab.label} icon={extraTab.icon} />
               : <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />}
           <footer className="page-footer"><span><i className="sync-dot" /> {dataSource} connection active</span><span>{dataSource === 'Google Sheets' ? 'Sheet checked every 20 seconds' : 'Workbook checked every 20 seconds'}</span></footer>
         </div>

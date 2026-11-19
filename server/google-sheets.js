@@ -1,6 +1,7 @@
 import { google } from 'googleapis';
 import { ADDRESS_HEADERS, DOB_HEADERS, GENDER_HEADERS, ageFrom, mapMasterData } from './workbook.js';
 import { REMINDER_HEADERS, REMINDER_SHEET, canonicalReminderHeader, mapReminder, nextReminderId, reminderCells } from './payment-reminders.js';
+import { CREDENTIAL_HEADERS, CREDENTIAL_SHEET, credentialRow, mapCredentialRow } from './credentials.js';
 import { WORK_PERMIT_HEADERS, WorkPermitError, mapWorkPermit, newWorkPermit, workPermitCells } from './work-permits.js';
 
 const SHEET_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
@@ -114,6 +115,8 @@ export function createGoogleSheetStore({
   workPermitSheetName = 'WorkPermits',
   reminderSheetName = REMINDER_SHEET,
   reminderSpreadsheetId: reminderSpreadsheetIdOption = '',
+  credentialSheetName = CREDENTIAL_SHEET,
+  credentialSpreadsheetId: credentialSpreadsheetIdOption = '',
   serviceAccountEmail,
   privateKey,
 }, api = google) {
@@ -575,6 +578,57 @@ export function createGoogleSheetStore({
     }
   }
 
+  // Credentials live in their own spreadsheet when GOOGLE_CREDENTIALS_SHEET_ID is set, else in the client spreadsheet.
+  const credentialSpreadsheetId = credentialSpreadsheetIdOption || spreadsheetId;
+  const credentialContext = (write = false) => ({
+    label: credentialSpreadsheetIdOption ? 'credentials' : 'client',
+    envName: credentialSpreadsheetIdOption ? 'GOOGLE_CREDENTIALS_SHEET_ID' : 'GOOGLE_SHEET_ID',
+    serviceAccountEmail,
+    write,
+  });
+
+  async function findCredentialTab(sheets, create) {
+    if (!looksLikeSpreadsheetId(credentialSpreadsheetId)) {
+      throw new SheetSetupError(`GOOGLE_CREDENTIALS_SHEET_ID is set to "${credentialSpreadsheetId}", which looks like a name, not a spreadsheet ID. Use the long ID from the sheet's web address.`);
+    }
+    const { data } = await sheets.spreadsheets.get({ spreadsheetId: credentialSpreadsheetId, fields: 'sheets.properties.title' });
+    const titles = (data.sheets || []).map((sheet) => sheet.properties?.title).filter(Boolean);
+    const title = titles.find((name) => name === credentialSheetName) || titles.find((name) => sameTitle(name, credentialSheetName)) || '';
+    if (title || !create) return title;
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId: credentialSpreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: credentialSheetName } } }] } });
+    return credentialSheetName;
+  }
+
+  async function listCredentials() {
+    const sheets = getSheetsClient();
+    try {
+      const title = await findCredentialTab(sheets, false);
+      if (!title) return [];
+      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: credentialSpreadsheetId, range: `${quoteSheetName(title)}!A:G`, valueRenderOption: 'FORMATTED_VALUE' });
+      const [headerRow = [], ...rows] = data.values || [];
+      const headers = headerRow.map((header) => String(header ?? '').trim());
+      return rows
+        .map((row) => mapCredentialRow(Object.fromEntries(headers.map((header, column) => [header, row[column] ?? '']))))
+        .filter((record) => record.id && record.website);
+    } catch (error) {
+      throw explainGoogleError(error, credentialContext());
+    }
+  }
+
+  // Rewrites the tab top-down, then clears rows left over below, so a failed save never blanks the tab first.
+  async function saveCredentials(records) {
+    const sheets = getSheetsClient();
+    try {
+      const title = await findCredentialTab(sheets, true);
+      const values = [CREDENTIAL_HEADERS, ...records.map(credentialRow)];
+      const lastColumn = columnLetters(CREDENTIAL_HEADERS.length);
+      await sheets.spreadsheets.values.update({ spreadsheetId: credentialSpreadsheetId, range: `${quoteSheetName(title)}!A1:${lastColumn}${values.length}`, valueInputOption: 'RAW', requestBody: { values } });
+      await sheets.spreadsheets.values.clear({ spreadsheetId: credentialSpreadsheetId, range: `${quoteSheetName(title)}!A${values.length + 1}:${lastColumn}` });
+    } catch (error) {
+      throw explainGoogleError(error, credentialContext(true));
+    }
+  }
+
   async function listWorkPermits() {
     const values = await readOtherSheet({
       targetSpreadsheetId: workPermitSpreadsheetId,
@@ -722,6 +776,7 @@ export function createGoogleSheetStore({
         return operation;
       },
     },
+    credentials: { list: listCredentials, save: saveCredentials },
     reminders: {
       load: async () => {
         const { reminders, notice } = await loadReminders();

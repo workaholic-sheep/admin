@@ -736,3 +736,27 @@ body { font-size: var(--type-body); }
 [data-theme="dark"] .document-scan-icon { background: var(--d-accent-bg); color: var(--d-accent); }
 [data-theme="dark"] .document-scan-preview { border-color: var(--line); }
 [data-theme="dark"] .document-scan-text pre { background: var(--d-bg); border-color: var(--line); color: var(--d-text-2); }
+
+/* Credentials (password manager) */
+.credential-table td { vertical-align: middle; }
+.credential-table td:first-child { min-width: 220px; white-space: normal; }
+.credential-table td strong { display: block; color: #33463b; font-size: var(--type-label); }
+.credential-link { display: inline-block; margin-top: 3px; color: var(--forest); font-size: var(--type-caption); text-decoration: none; }
+.credential-link:hover { text-decoration: underline; }
+.credential-notes { display: block; max-width: 320px; margin-top: 4px; overflow: hidden; color: #8a968e; font-size: var(--type-caption); text-overflow: ellipsis; white-space: nowrap; }
+.credential-value { display: inline-flex; align-items: center; gap: 6px; }
+.credential-value > span { overflow: hidden; max-width: 220px; text-overflow: ellipsis; }
+.credential-value code { min-width: 92px; padding: 4px 7px; border-radius: 4px; background: #f3f6f2; color: #627268; font-family: ui-monospace, Consolas, monospace; font-size: var(--type-small); letter-spacing: 1px; }
+.credential-value code.is-shown { color: #26392e; letter-spacing: 0; user-select: all; }
+.credential-value .icon-button, .credential-actions .icon-button { width: 30px; height: 30px; }
+.credential-value .icon-button:disabled, .credential-actions .icon-button:disabled { opacity: .5; cursor: wait; }
+.credential-actions { display: inline-flex; gap: 6px; }
+.credential-table th:last-child, .credential-table td:last-child { width: auto; text-align: right; }
+.credential-generate { justify-self: start; padding: 2px 0; }
+.table-foot > span:last-child svg { color: var(--forest); }
+[data-theme="dark"] .credential-table td strong { color: var(--d-text); }
+[data-theme="dark"] .credential-link { color: var(--d-accent); }
+[data-theme="dark"] .credential-notes { color: var(--d-text-3); }
+[data-theme="dark"] .credential-value code { background: var(--d-raised); color: var(--d-text-3); }
+[data-theme="dark"] .credential-value code.is-shown { color: var(--d-text); }
+[data-theme="dark"] .table-foot > span:last-child svg { color: var(--d-accent); }

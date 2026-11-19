@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { SheetSetupError, createGoogleSheetStore, spreadsheetIdFrom } from './google-sheets.js';
 import { createSessionAuth } from './session-auth.js';
 import { createReminderWorkbookStore } from './payment-reminders.js';
+import { CredentialError, createCredentialService, createCredentialWorkbookStore, credentialInput, credentialKeyFor } from './credentials.js';
 import { createWorkbookStore } from './workbook.js';
 import {
   DECISIONS, WorkPermitError, createWorkPermitWorkbookStore, formatANumber, workPermitStatus, isTrackingToken, newTrackingToken, pauseClock, resumeClock,
@@ -16,6 +17,7 @@ const workbookPath = resolve(process.env.WORKBOOK_PATH || resolve(root, "Prototy
 const courtWorkbookPath = resolve(process.env.COURT_WORKBOOK_PATH || resolve(root, 'Prototype of Reports.xlsx'));
 const workPermitWorkbookPath = resolve(process.env.WORK_PERMIT_WORKBOOK_PATH || resolve(root, 'BBeckford_WorkPermit_Database.xlsx'));
 const reminderWorkbookPath = resolve(process.env.PAYMENT_REMINDER_WORKBOOK_PATH || resolve(root, 'BBeckford_PaymentReminders.xlsx'));
+const credentialWorkbookPath = resolve(process.env.CREDENTIALS_WORKBOOK_PATH || resolve(root, 'BBeckford_Credentials.xlsx'));
 const port = Number(process.env.PORT || 3001);
 const production = process.env.NODE_ENV === 'production';
 const useGoogleSheets = process.env.DATA_SOURCE === 'google-sheets' || Boolean(process.env.GOOGLE_SHEET_ID);
@@ -39,12 +41,19 @@ const store = useGoogleSheets
     workPermitSheetName: process.env.GOOGLE_WORK_PERMIT_SHEET_NAME || 'WorkPermits',
     reminderSheetName: process.env.GOOGLE_PAYMENT_REMINDER_SHEET_NAME || 'PaymentReminders',
     reminderSpreadsheetId: spreadsheetIdFrom(process.env.GOOGLE_PAYMENT_REMINDER_SHEET_ID),
+    credentialSheetName: process.env.GOOGLE_CREDENTIALS_SHEET_NAME || 'Credentials',
+    credentialSpreadsheetId: spreadsheetIdFrom(process.env.GOOGLE_CREDENTIALS_SHEET_ID),
     serviceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     privateKey: process.env.GOOGLE_PRIVATE_KEY,
   })
   : createWorkbookStore(workbookPath, courtWorkbookPath);
 const workPermitStore = useGoogleSheets ? store.workPermits : createWorkPermitWorkbookStore(workPermitWorkbookPath);
 const reminderStore = useGoogleSheets ? store.reminders : createReminderWorkbookStore(reminderWorkbookPath);
+// Without CREDENTIALS_KEY in production the rest of the app still runs; only the password manager reports that it needs setup.
+const credentials = createCredentialService(
+  useGoogleSheets ? store.credentials : createCredentialWorkbookStore(credentialWorkbookPath),
+  credentialKeyFor({ production, secret: process.env.CREDENTIALS_KEY }),
+);
 const sessionAuth = createSessionAuth({
   enabled: production,
   password: process.env.APP_PASSWORD,
@@ -319,6 +328,42 @@ app.put('/api/payment-reminders/:reminderId', async (request, response, next) =>
     reminderError(error, response, next);
   }
 });
+
+// Password manager. Responses are never cached, and the list never includes passwords;
+// a password is decrypted only when staff ask to show or copy it.
+app.use('/api/credentials', (_request, response, next) => {
+  response.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
+const credentialRoute = (handler) => async (request, response, next) => {
+  try {
+    await handler(request, response);
+  } catch (error) {
+    if (error instanceof CredentialError) return response.status(error.status).json({ error: error.message });
+    return next(error);
+  }
+};
+
+app.get('/api/credentials', credentialRoute(async (_request, response) => {
+  response.json({ credentials: await credentials.list(), source: sourceName });
+}));
+
+app.post('/api/credentials', credentialRoute(async (request, response) => {
+  response.status(201).json({ credential: await credentials.add(credentialInput(request.body, { requirePassword: true })) });
+}));
+
+app.put('/api/credentials/:id', credentialRoute(async (request, response) => {
+  response.json({ credential: await credentials.update(request.params.id, credentialInput(request.body, { requirePassword: false })) });
+}));
+
+app.delete('/api/credentials/:id', credentialRoute(async (request, response) => {
+  response.json({ credential: await credentials.remove(request.params.id) });
+}));
+
+app.post('/api/credentials/:id/reveal', credentialRoute(async (request, response) => {
+  response.json({ password: await credentials.reveal(request.params.id) });
+}));
 
 // Date of birth, gender, and address are optional; reject malformed values before they reach the sheet.
 function personalDetailsError(input) {
