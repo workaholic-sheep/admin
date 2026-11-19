@@ -1,5 +1,5 @@
 import { CASE_TYPES } from '../src/case-types.js';
-import { TEAM_MEMBERS } from '../src/team.js';
+import { SCHEDULE_ADDED_BY } from '../src/team.js';
 import { SCHEDULE_MODES, SCHEDULE_STATUSES, timeFrom24h, timeTo24h } from '../src/schedule.js';
 import { centralTimestamp } from './case-assignments.js';
 
@@ -84,7 +84,7 @@ export function scheduleInput(body, clients) {
   const mode = String(input.mode ?? '').trim();
   if (!SCHEDULE_MODES.includes(mode)) throw new ScheduleError(`Choose how you'll meet: ${SCHEDULE_MODES.join(', ')}.`);
   const addedBy = String(input.addedBy ?? '').trim();
-  if (!TEAM_MEMBERS.includes(addedBy)) throw new ScheduleError('Choose who is adding this.');
+  if (!SCHEDULE_ADDED_BY.includes(addedBy)) throw new ScheduleError('Choose who is adding this.');
   const status = String(input.status || 'Scheduled').trim();
   if (!SCHEDULE_STATUSES.includes(status)) throw new ScheduleError('Choose a valid status.');
   const purpose = String(input.purpose ?? '').trim();

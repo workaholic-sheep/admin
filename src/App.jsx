@@ -50,7 +50,7 @@ import {
 import { CASE_TYPES, countCaseTypes, isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
 import { pageFromPath, pathForPage } from './routes.js';
 import { scanDocument, warmUpScanner } from './document-scan.js';
-import { TEAM_MEMBERS } from './team.js';
+import { SCHEDULE_ADDED_BY, TEAM_MEMBERS } from './team.js';
 import { splitName } from './names.js';
 import { CASE_STATUSES, caseStatusTone } from './case-status.js';
 import { SCHEDULE_MODES, SCHEDULE_STATUSES, timeTo24h } from './schedule.js';
@@ -790,7 +790,7 @@ function clientSuggestions(clients, text) {
     .slice(0, 8);
 }
 
-function NameSuggest({ value, clients, onChange, onPick }) {
+function NameSuggest({ value, clients, onChange, onPick, required = true, autoFocus = true }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const listId = useId();
@@ -813,7 +813,7 @@ function NameSuggest({ value, clients, onChange, onPick }) {
   return (
     <span className="name-suggest">
       <input
-        name="name" value={value} maxLength={200} placeholder="Start typing a client name" required autoFocus autoComplete="off"
+        name="name" value={value} maxLength={200} placeholder="Start typing a client name" required={required} autoFocus={autoFocus} autoComplete="off"
         role="combobox" aria-expanded={showList} aria-controls={listId} aria-autocomplete="list"
         aria-activedescendant={showList ? `${listId}-${active}` : undefined}
         onChange={(event) => { onChange(event.target.value); setOpen(true); setActive(0); }}
@@ -1284,7 +1284,7 @@ function SchedulePage({ clients, onSelectClient, onToast }) {
     try { author = localStorage.getItem('note-author') || ''; } catch { /* no saved choice */ }
     setForm(entry
       ? { ...emptyAppointment, ...entry, time: timeTo24h(entry.time) }
-      : { ...emptyAppointment, date: today, addedBy: TEAM_MEMBERS.includes(author) ? author : '' });
+      : { ...emptyAppointment, date: today, addedBy: SCHEDULE_ADDED_BY.includes(author) ? author : '' });
     setFormError('');
   }
 
@@ -1376,9 +1376,9 @@ function SchedulePage({ clients, onSelectClient, onToast }) {
           <fieldset className="case-type-picker field-wide"><legend>Mode of communication</legend><div className="case-type-options">{SCHEDULE_MODES.map((mode) => <label key={mode} className={`case-type-option ${form.mode === mode ? 'selected' : ''}`}><input type="radio" name="mode" value={mode} checked={form.mode === mode} onChange={update} />{mode}</label>)}</div></fieldset>
           <label className="field field-wide">{form.mode === 'Zoom' ? 'Zoom link' : form.mode === 'In Person' ? 'Location' : 'Phone number'}<input name="location" value={form.location} onChange={update} maxLength={500} placeholder={form.mode === 'Zoom' ? 'https://zoom.us/j/…' : form.mode === 'In Person' ? 'Office, courthouse or address' : 'Number to call'} /></label>
           <label className="field field-wide">Purpose<b>*</b><input name="purpose" value={form.purpose} onChange={update} maxLength={300} required placeholder="e.g. VAWA intake consultation" /></label>
-          <label className="field">Client (optional)<NameSuggest value={form.clientName} clients={clients} onChange={(name) => setForm((current) => ({ ...current, clientName: name, clientId: '', caseType: '' }))} onPick={(client) => setForm((current) => ({ ...current, clientName: client.name, clientId: client.id, caseType: '' }))} /></label>
+          <label className="field">Client (optional)<NameSuggest required={false} autoFocus={false} value={form.clientName} clients={clients} onChange={(name) => setForm((current) => ({ ...current, clientName: name, clientId: '', caseType: '' }))} onPick={(client) => setForm((current) => ({ ...current, clientName: client.name, clientId: client.id, caseType: '' }))} /></label>
           <label className="field">Case (optional)<select name="caseType" value={form.caseType} onChange={update}><option value="">None</option>{clientCases.map((type) => <option key={type}>{type}</option>)}</select><ChevronDown size={15} /></label>
-          <label className="field">Added by<select name="addedBy" value={form.addedBy} onChange={update} required><option value="" disabled>Choose…</option>{TEAM_MEMBERS.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
+          <label className="field">Added by<select name="addedBy" value={form.addedBy} onChange={update} required><option value="" disabled>Choose…</option>{SCHEDULE_ADDED_BY.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
           {editing !== 'new' && <label className="field">Status<select name="status" value={form.status} onChange={update}>{SCHEDULE_STATUSES.map((status) => <option key={status}>{status}</option>)}</select><ChevronDown size={15} /></label>}
         </div>
         {formError && <div className="form-error" role="alert">{formError}</div>}
