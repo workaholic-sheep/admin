@@ -25,6 +25,7 @@ import {
   Link2,
   LogOut,
   Menu,
+  MessageSquareText,
   Moon,
   Pause,
   Pencil,
@@ -533,8 +534,28 @@ function editValues(client) {
   };
 }
 
-function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember, onSetCaseStatus }) {
+function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember, onSetCaseStatus, onNoteAdded }) {
   const clientCaseTypes = CASE_TYPES.filter((type) => isCaseTypeSelected(client.caseType, type));
+  const [notes, setNotes] = useState([]);
+  const [notesState, setNotesState] = useState('loading');
+  const hasCases = clientCaseTypes.length > 0;
+  useEffect(() => {
+    if (!hasCases || !client.id) return undefined;
+    let active = true;
+    setNotesState('loading');
+    fetch(`/api/case-notes?clientId=${encodeURIComponent(client.id)}`)
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load notes.');
+        if (active) { setNotes(result.notes || []); setNotesState('ready'); }
+      })
+      .catch((error) => { if (active) setNotesState(error.message); });
+    return () => { active = false; };
+  }, [client.id, hasCases]);
+  const addNote = (note) => {
+    setNotes((current) => [note, ...current]);
+    onNoteAdded(note);
+  };
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -624,7 +645,7 @@ function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember,
           <section className="detail-cases">
             <div className="detail-court-heading"><h3>Cases &amp; team</h3><span>{clientCaseTypes.length}</span></div>
             {clientCaseTypes.length
-              ? <ul className="detail-case-list">{clientCaseTypes.map((type) => <li key={type}><span className="case-pill">{type}</span><span className="detail-case-controls"><CaseStatusSelect value={client.caseStatus?.[type] || 'Not Started'} onChange={(status) => onSetCaseStatus(client, type, status)} label={`Status of the ${type} case`} /><TeamSelect value={client.caseTeam?.[type] || ''} onChange={(member) => onSetTeamMember(client, type, member)} label={`Team member for the ${type} case`} /></span></li>)}</ul>
+              ? <ul className="detail-case-list">{clientCaseTypes.map((type) => <li key={type}><div className="detail-case-head"><span className="case-pill">{type}</span><span className="detail-case-controls"><CaseStatusSelect value={client.caseStatus?.[type] || 'Not Started'} onChange={(status) => onSetCaseStatus(client, type, status)} label={`Status of the ${type} case`} /><TeamSelect value={client.caseTeam?.[type] || ''} onChange={(member) => onSetTeamMember(client, type, member)} label={`Team member for the ${type} case`} /></span></div>{notesState !== 'loading' && notesState !== 'ready' && <p className="form-error">{notesState}</p>}<CaseNotes key={`${client.id}-${type}`} client={client} caseType={type} notes={notes.filter((note) => note.caseType === type)} loading={notesState === 'loading'} onAdded={addNote} /></li>)}</ul>
               : <p className="court-date-empty">Not in any case type yet. Drag this client onto a case type in the sidebar, or tick one under Edit.</p>}
           </section>
           <section className="detail-court-dates">
@@ -1419,6 +1440,77 @@ function CaseTypePills({ value, team = {}, status = {} }) {
   return <span className="case-pills">{types.map((type) => <span key={type} className={`case-pill tone-${caseStatusTone(status[type])}`} title={`${type}: ${status[type] || 'Not Started'}${team[type] ? `, handled by ${team[type]}` : ', no team member yet'}`}>{type}{team[type] && <b> · {team[type]}</b>}</span>)}</span>;
 }
 
+// "2026-11-19 2:05 PM" (stored in Central Time) → "Nov 19, 2026 · 2:05 PM CT".
+function formatNoteTime(value) {
+  const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})\s+(.+)$/);
+  return match ? `${formatDate(match[1])} · ${match[2]} CT` : value || '';
+}
+
+const NOTES_SHOWN = 3;
+
+function NoteSummary({ entry }) {
+  if (!entry) return <span className="muted">No notes</span>;
+  return <span className="note-summary" title={`Latest by ${entry.latest.teamMember}: ${entry.latest.text}`}><MessageSquareText size={14} aria-hidden="true" /><b>{entry.count}</b><small>{formatNoteTime(entry.latest.createdAt).split(' · ')[0]}</small></span>;
+}
+
+// The note log for one client's case, newest first, with a box to add another.
+function CaseNotes({ client, caseType, notes, loading, onAdded }) {
+  const [text, setText] = useState('');
+  const [author, setAuthor] = useState(() => {
+    let remembered = '';
+    try { remembered = localStorage.getItem('note-author') || ''; } catch { /* no saved choice */ }
+    return client.caseTeam?.[caseType] || (TEAM_MEMBERS.includes(remembered) ? remembered : '');
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [showAll, setShowAll] = useState(false);
+  const shown = showAll ? notes : notes.slice(0, NOTES_SHOWN);
+
+  async function add(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      const response = await fetch('/api/case-notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: client.id, caseType, teamMember: author, text }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not save this note.');
+      try { localStorage.setItem('note-author', author); } catch { /* remembered for this visit only */ }
+      setText('');
+      onAdded(result.note);
+    } catch (saveError) {
+      setError(saveError.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="case-notes">
+      <form className="case-note-form" onSubmit={add}>
+        <textarea value={text} onChange={(event) => setText(event.target.value)} rows={2} maxLength={2000} placeholder={`Add a note to the ${caseType} case…`} aria-label={`New note for the ${caseType} case`} required />
+        <div className="case-note-actions">
+          <label className="case-note-author">By<select value={author} onChange={(event) => setAuthor(event.target.value)} required aria-label="Who is writing this note"><option value="" disabled>Choose…</option>{TEAM_MEMBERS.map((name) => <option key={name}>{name}</option>)}</select></label>
+          <button className="button button-primary" type="submit" disabled={saving || !text.trim() || !author}><Plus size={14} />{saving ? 'Saving…' : 'Add note'}</button>
+        </div>
+        {error && <div className="form-error" role="alert">{error}</div>}
+      </form>
+      {loading ? <p className="case-note-empty">Loading notes…</p>
+        : !notes.length ? <p className="case-note-empty">No notes yet.</p>
+          : <ol className="case-note-list">
+            {shown.map((note) => <li key={note.id}>
+              <div className="case-note-meta"><b>{note.teamMember || 'Unknown'}</b><time>{formatNoteTime(note.createdAt)}</time></div>
+              <p>{note.text}</p>
+            </li>)}
+          </ol>}
+      {notes.length > NOTES_SHOWN && <button className="text-button" type="button" onClick={() => setShowAll((all) => !all)}>{showAll ? 'Show fewer' : `Show all ${notes.length} notes`}</button>}
+    </div>
+  );
+}
+
 // Red / yellow / green status for one client's case.
 function CaseStatusSelect({ value = 'Not Started', onChange, label }) {
   const options = CASE_STATUSES.includes(value) ? CASE_STATUSES : [...CASE_STATUSES, value];
@@ -1490,12 +1582,33 @@ function CaseClientPicker({ clients, caseType, onAdd }) {
   );
 }
 
-function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, onSetTeamMember, onSetCaseStatus, view = 'clients' }) {
+function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, onSetTeamMember, onSetCaseStatus, notesVersion = 0, view = 'clients' }) {
   // MasterData columns can come and go; only show the ones that have data for someone.
   const hasFrequency = clients.some((client) => client.frequency);
   const hasNextContact = clients.some((client) => client.nextContactDate);
   const hasPayment = clients.some((client) => client.paymentStatus);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [noteSummary, setNoteSummary] = useState(() => new Map());
+  const noteCaseType = view.startsWith('case:') ? view.slice('case:'.length) : '';
+  // Note count and latest note per client, for the Notes column on a case page.
+  useEffect(() => {
+    if (!noteCaseType) return undefined;
+    let active = true;
+    fetch(`/api/case-notes?caseType=${encodeURIComponent(noteCaseType)}`)
+      .then((response) => (response.ok ? response.json() : { notes: [] }))
+      .then((result) => {
+        if (!active) return;
+        const summary = new Map();
+        for (const note of result.notes || []) {
+          const entry = summary.get(note.clientId) || { count: 0, latest: note };
+          entry.count += 1;
+          summary.set(note.clientId, entry);
+        }
+        setNoteSummary(summary);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [noteCaseType, notesVersion]);
   const [selected, setSelected] = useState(() => new Set());
   const [assigning, setAssigning] = useState(false);
   const [frequency, setFrequency] = useState('All frequencies');
@@ -1607,9 +1720,9 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
           {caseType && <FilterMenu label="Team member" value={teamFilter} onChange={setTeamFilter} icon={UserRound} options={[{ value: 'all', label: 'All team members' }, ...TEAM_MEMBERS.map((name) => ({ value: name, label: name })), { value: 'none', label: 'Unassigned' }]} />}
           <FilterMenu label="Sort clients" value={sortOrder} onChange={setSortOrder} icon={ArrowDownAZ} options={[{ value: 'name', label: 'Name A-Z' }, { value: 'clientId', label: 'CL number' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th>{caseType ? <><th>Status</th><th>Team member</th></> : <th>Case type</th>}{hasFrequency && <th>Meeting frequency</th>}{hasNextContact && <th>Next contact</th>}{hasPayment && <th>Payment</th>}<th aria-label="Open client" /></tr></thead><tbody>
-          {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td>{caseType ? <><td><CaseStatusSelect value={client.caseStatus?.[caseType] || 'Not Started'} onChange={(status) => onSetCaseStatus(client, caseType, status)} label={`Status of ${client.name}'s ${caseType} case`} /></td><td><TeamSelect value={client.caseTeam?.[caseType] || ''} onChange={(member) => onSetTeamMember(client, caseType, member)} label={`Team member for ${client.name}'s ${caseType} case`} /></td></> : <td><CaseTypePills value={client.caseType} team={client.caseTeam} status={client.caseStatus} /></td>}{hasFrequency && <td>{client.frequency || <span className="muted">Not set</span>}</td>}{hasNextContact && <td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td>}{hasPayment && <td><Status value={client.paymentStatus} /></td>}<td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
-          {!visibleClients.length && <tr><td colSpan={3 + (caseType ? 2 : 1) + [hasFrequency, hasNextContact, hasPayment].filter(Boolean).length}><div className="table-empty">{caseType && !clients.some((client) => isCaseTypeSelected(client.caseType, caseType)) ? <><GripVertical size={22} /><strong>No clients in {caseType} yet</strong><span>Drag clients here from the All clients list on the right.</span></> : <><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></>}</div></td></tr>}
+        <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th>{caseType ? <><th>Status</th><th>Team member</th><th>Notes</th></> : <th>Case type</th>}{hasFrequency && <th>Meeting frequency</th>}{hasNextContact && <th>Next contact</th>}{hasPayment && <th>Payment</th>}<th aria-label="Open client" /></tr></thead><tbody>
+          {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td>{caseType ? <><td><CaseStatusSelect value={client.caseStatus?.[caseType] || 'Not Started'} onChange={(status) => onSetCaseStatus(client, caseType, status)} label={`Status of ${client.name}'s ${caseType} case`} /></td><td><TeamSelect value={client.caseTeam?.[caseType] || ''} onChange={(member) => onSetTeamMember(client, caseType, member)} label={`Team member for ${client.name}'s ${caseType} case`} /></td><td><NoteSummary entry={noteSummary.get(client.id)} /></td></> : <td><CaseTypePills value={client.caseType} team={client.caseTeam} status={client.caseStatus} /></td>}{hasFrequency && <td>{client.frequency || <span className="muted">Not set</span>}</td>}{hasNextContact && <td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td>}{hasPayment && <td><Status value={client.paymentStatus} /></td>}<td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
+          {!visibleClients.length && <tr><td colSpan={3 + (caseType ? 3 : 1) + [hasFrequency, hasNextContact, hasPayment].filter(Boolean).length}><div className="table-empty">{caseType && !clients.some((client) => isCaseTypeSelected(client.caseType, caseType)) ? <><GripVertical size={22} /><strong>No clients in {caseType} yet</strong><span>Drag clients here from the All clients list on the right.</span></> : <><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></>}</div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visibleClients.length} of {clients.length}</span><span><i className="sync-dot" /> Synced from MasterData</span></div>
       </section>
@@ -1683,6 +1796,7 @@ export default function App() {
     try { return localStorage.getItem('nav-clients-open') !== 'false'; } catch { return true; }
   });
   const [dropTarget, setDropTarget] = useState('');
+  const [notesVersion, setNotesVersion] = useState(0);
   useEffect(() => {
     try { localStorage.setItem('nav-clients-open', String(clientsOpen)); } catch { /* remembered for this visit only */ }
   }, [clientsOpen]);
@@ -1913,6 +2027,10 @@ export default function App() {
       setCaseError(error.message);
     }
   }
+  function noteAdded(note) {
+    setNotesVersion((version) => version + 1);
+    setToast(`Note added to ${note.clientName}'s ${note.caseType} case`);
+  }
   const setTeamMember = (client, caseType, member) => setCaseDetail(client, caseType, 'team', member);
   const setCaseStatus = (client, caseType, status) => setCaseDetail(client, caseType, 'status', status);
 
@@ -2003,7 +2121,7 @@ export default function App() {
               : page === 'court-dates' || resultView === 'court-dates'
                 ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
                 : resultView
-                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} view={resultView} />
+                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} notesVersion={notesVersion} view={resultView} />
               : page === 'credentials'
                 ? <CredentialsPage onToast={setToast} />
               : extraTab
@@ -2013,7 +2131,7 @@ export default function App() {
         </div>
       </main>
       {intakeOpen && <ClientForm onClose={() => setIntakeOpen(false)} onCreated={createdClient} />}
-      {selectedClient && <ClientDetails client={selectedClient} courtDates={courtDates} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} />}
+      {selectedClient && <ClientDetails client={selectedClient} courtDates={courtDates} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} onNoteAdded={noteAdded} />}
       {toast && <div className="toast"><span><Check size={15} /></span>{toast}</div>}
     </div>
   );

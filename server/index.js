@@ -250,6 +250,40 @@ app.put(['/api/case-assignments/team', '/api/case-assignments/status'], async (r
   }
 });
 
+// Case notes: an add-only log in the Case_Notes tab. The server stamps each note in Central Time.
+app.get('/api/case-notes', async (request, response, next) => {
+  const clientId = String(request.query.clientId || '');
+  const caseType = String(request.query.caseType || '');
+  if (!clientId && !CASE_TYPES.includes(caseType)) return response.status(400).json({ error: 'Choose a client or a case type.' });
+  try {
+    response.json({ notes: await cases.listNotes({ clientId, caseType }) });
+  } catch (error) {
+    if (error instanceof CaseSetupError) return response.status(503).json({ error: error.message });
+    next(error);
+  }
+});
+
+app.post('/api/case-notes', async (request, response, next) => {
+  const clientId = String(request.body?.clientId || '');
+  const caseType = String(request.body?.caseType || '');
+  const teamMember = String(request.body?.teamMember || '').trim();
+  const text = String(request.body?.text || '').trim();
+  if (!CASE_TYPES.includes(caseType)) return response.status(400).json({ error: 'Choose a valid case type.' });
+  if (!TEAM_MEMBERS.includes(teamMember)) return response.status(400).json({ error: 'Choose who is writing this note.' });
+  if (!text) return response.status(400).json({ error: 'Write a note first.' });
+  if (text.length > 2000) return response.status(400).json({ error: 'Notes must be 2,000 characters or fewer.' });
+  try {
+    const client = (await store.list()).find((item) => item.id === clientId);
+    if (!client) return response.status(404).json({ error: 'Client not found.' });
+    const { assignments } = await caseAssignments();
+    if (assignments && !assignments[caseType]?.has(clientId)) return response.status(404).json({ error: `This client is not in ${caseType}.` });
+    response.status(201).json({ note: await cases.addNote({ client, caseType, teamMember, text }) });
+  } catch (error) {
+    if (error instanceof CaseSetupError) return response.status(503).json({ error: error.message });
+    next(error);
+  }
+});
+
 // Drag and drop: add or remove many clients from one case type, touching only that case tab.
 app.post('/api/case-assignments', async (request, response, next) => {
   const caseType = String(request.body?.caseType || '');

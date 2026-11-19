@@ -8,6 +8,9 @@ import { DEFAULT_CASE_STATUS, normalizeCaseStatus } from '../src/case-status.js'
 // MasterData's old CaseType column is read once (first sync) to seed the case tabs and never written.
 
 export const CLIENT_INFO_TAB = 'Client_Info';
+// Case notes are a running log: one row per note, stamped by the server in Central Time.
+export const NOTES_TAB = 'Case_Notes';
+export const NOTE_HEADERS = ['Note ID', 'Id', 'Client Name', 'Case Type', 'Date & Time (CT)', 'Team Member', 'Note'];
 export const CLIENT_INFO_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Address', 'Current Address'];
 export const CASE_TAB_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Status', 'Team Member', 'Date Added'];
 // Columns the app keeps equal to MasterData. Everything else (Date Added, Status, Team Member,
@@ -38,6 +41,22 @@ function columnOf(headers, name) {
   return headers.findIndex((header) => accepted.includes(key(header)));
 }
 
+
+// "2026-11-19 2:05 PM" in Central Time (CST/CDT handled by the time zone database).
+export function centralTimestamp(date = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit', hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(date).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.dayPeriod}`;
+}
+
+function notesIn(tab) {
+  if (!tab) return [];
+  const column = (name) => columnOf(tab.headers, name);
+  const columns = { id: column('Note ID'), clientId: column('Id'), clientName: column('Client Name'), caseType: column('Case Type'), createdAt: column('Date & Time (CT)'), teamMember: column('Team Member'), text: column('Note') };
+  const cell = (row, key) => (columns[key] === -1 ? '' : String(row[columns[key]] ?? '').trim());
+  return tab.rows
+    .map((row) => Object.fromEntries(Object.keys(columns).map((key) => [key, cell(row, key)])))
+    .filter((note) => note.clientId && note.text);
+}
 
 function centralToday() {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
@@ -169,6 +188,23 @@ export function createCaseAssignments(tabs, setupMessage = '') {
 
   return {
     configured: Boolean(tabs),
+
+    // Newest first. Filter by clientId and/or caseType.
+    async listNotes({ clientId = '', caseType = '' } = {}) {
+      const map = await requireTabs().read([NOTES_TAB]);
+      return notesIn(map.get(NOTES_TAB))
+        .filter((note) => (!clientId || note.clientId === clientId) && (!caseType || note.caseType === caseType))
+        .reverse();
+    },
+
+    addNote: ({ client, caseType, teamMember, text }) => queued(async () => {
+      const map = await requireTabs().read([NOTES_TAB]);
+      const tab = await ensure(map.get(NOTES_TAB), NOTES_TAB, NOTE_HEADERS);
+      const highest = notesIn(tab).reduce((max, note) => Math.max(max, Number(note.id.match(/\d+/)?.[0] || 0)), 0);
+      const note = { id: `N-${String(highest + 1).padStart(5, '0')}`, clientId: client.id, clientName: client.name, caseType, createdAt: centralTimestamp(), teamMember, text };
+      await requireTabs().append(tab, [rowFor(tab.headers, { 'Note ID': note.id, Id: note.clientId, 'Client Name': note.clientName, 'Case Type': caseType, 'Date & Time (CT)': note.createdAt, 'Team Member': teamMember, Note: text })]);
+      return note;
+    }),
     load,
     // Last known assignments, loading them if this server instance has none yet.
     current: async () => cached || load(),
