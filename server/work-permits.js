@@ -209,7 +209,7 @@ export function createWorkPermitWorkbookStore(filePath) {
     const headers = [];
     sheet.getRow(1).eachCell({ includeEmpty: false }, (cell, column) => { headers[column] = cellValue(cell).trim(); });
     const records = [];
-    for (let rowNumber = 2; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
+    for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
       const row = sheet.getRow(rowNumber);
       const raw = {};
       headers.forEach((header, column) => { if (header) raw[header] = cellValue(row.getCell(column)); });

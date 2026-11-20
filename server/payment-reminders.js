@@ -66,7 +66,7 @@ function readSheet(sheet) {
   const headers = [];
   sheet.getRow(1).eachCell({ includeEmpty: false }, (cell, column) => { headers[column] = canonicalReminderHeader(cellValue(cell)); });
   const reminders = [];
-  for (let rowNumber = 2; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
+  for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber);
     const record = {};
     headers.forEach((header, column) => { if (header) record[header] = cellValue(row.getCell(column)); });

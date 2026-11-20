@@ -384,6 +384,28 @@ export function createGoogleSheetStore({
     return mappedClient(headers, row);
   }
 
+// Removes the client's row from MasterData. The row's ID is read again just before deleting, so a
+  // row that moved (someone sorted or edited the sheet meanwhile) is never deleted by mistake.
+  async function removeClient(clientId) {
+    const { sheets, headers, rows, sheetName, quotedSheet } = await getRows();
+    const idIndex = headers.findIndex((header) => ID_HEADERS.map(normalize).includes(normalize(header)));
+    if (idIndex === -1) throw new Error('Client not found.');
+    const rowIndex = rows.findIndex((row) => String(row[idIndex] ?? '') === clientId);
+    if (rowIndex < 0) throw new Error('Client not found.');
+    const client = mappedClient(headers, rows[rowIndex]);
+    const sheetRow = rowIndex + 2;
+    const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties(sheetId,title)' });
+    const sheetId = (data.sheets || []).find((sheet) => sheet.properties?.title === sheetName)?.properties?.sheetId;
+    if (sheetId === undefined) throw new SheetSetupError(`Could not find the ${sheetName} tab.`);
+    const check = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quotedSheet}!${columnLetters(idIndex + 1)}${sheetRow}`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    if (String(check.data.values?.[0]?.[0] ?? '') !== clientId) throw new Error('MasterData changed while deleting. Refresh and try again.');
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests: [{ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: sheetRow - 1, endIndex: sheetRow } } }] },
+    });
+    return client;
+  }
+
   async function updateClient(clientId, input) {
     const { sheets, headers, rows, quotedSheet } = await getRows();
     const indexes = new Map(headers.map((header, index) => [normalize(header), index]));
@@ -812,6 +834,11 @@ export function createGoogleSheetStore({
     },
     update(clientId, input) {
       const operation = queuedWrite.then(() => updateClient(clientId, input));
+      queuedWrite = operation.catch(() => {});
+      return operation;
+    },
+    remove(clientId) {
+      const operation = queuedWrite.then(() => removeClient(clientId));
       queuedWrite = operation.catch(() => {});
       return operation;
     },

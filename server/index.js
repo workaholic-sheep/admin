@@ -9,7 +9,7 @@ import { createReminderWorkbookStore } from './payment-reminders.js';
 import { CredentialError, createCredentialService, createCredentialWorkbookStore, credentialInput, credentialKeyFor } from './credentials.js';
 import { createWorkbookStore } from './workbook.js';
 import { CaseNotFoundError, CaseSetupError, createCaseAssignments } from './case-assignments.js';
-import { TEAM_MEMBERS } from '../src/team.js';
+import { SCHEDULE_ADDED_BY, TEAM_MEMBERS } from '../src/team.js';
 import { nameParts } from '../src/names.js';
 import { CASE_STATUSES } from '../src/case-status.js';
 import { ScheduleError, createSchedule, scheduleInput } from './schedule.js';
@@ -606,6 +606,42 @@ app.post('/api/clients', async (request, response, next) => {
     response.status(201).json({ client: saved, caseError, modifiedAt, source: sourceName });
   } catch (error) {
     if (error.message.includes('already exists')) return response.status(409).json({ error: error.message });
+    if (error.message.includes('locked by Excel')) return response.status(423).json({ error: error.message });
+    next(error);
+  }
+});
+
+// Deleting a client: the person types the client's name to confirm and says who they are.
+// Order: log the deletion, remove the MasterData row, then clear Client_Info and the case tabs.
+// Case notes and schedule entries stay as history.
+const comparableName = (value) => String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+app.delete('/api/clients/:clientId', async (request, response, next) => {
+  const clientId = String(request.params.clientId || '');
+  const deletedBy = String(request.body?.deletedBy || '').trim();
+  const confirmName = String(request.body?.confirmName || '');
+  if (!SCHEDULE_ADDED_BY.includes(deletedBy)) return response.status(400).json({ error: 'Choose who is deleting this client.' });
+  try {
+    const client = (await store.list()).find((item) => item.id === clientId);
+    if (!client) return response.status(404).json({ error: 'Client not found. They may already have been deleted.' });
+    if (comparableName(confirmName) !== comparableName(client.name)) return response.status(400).json({ error: `Type the client's name exactly as shown (${client.name}) to confirm.` });
+    if (!cases.configured) return response.status(503).json({ error: 'Deleting needs the Clients_Additional_Info spreadsheet, where deletions are logged. Connect it first.' });
+    const { assignments } = await caseAssignments();
+    const caseTypes = withCaseTypes(client, assignments).caseType;
+    const deletedAt = await cases.logDeletion({ client, deletedBy, caseTypes });
+    await store.remove(clientId);
+    let warning = '';
+    try {
+      await cases.removeClientRows(clientId);
+    } catch (error) {
+      console.error(error);
+      warning = `${client.name} was removed from MasterData, but their rows in Client_Info or the case tabs could not be cleared: ${error.message}`;
+    }
+    lastSync = 0;
+    response.json({ deleted: { id: client.id, name: client.name, deletedAt, deletedBy }, warning });
+  } catch (error) {
+    if (error instanceof CaseSetupError) return response.status(503).json({ error: error.message });
+    if (error.message === 'Client not found.') return response.status(404).json({ error: error.message });
+    if (error.message.includes('changed while deleting')) return response.status(409).json({ error: error.message });
     if (error.message.includes('locked by Excel')) return response.status(423).json({ error: error.message });
     next(error);
   }

@@ -181,7 +181,7 @@ export function createCredentialWorkbookStore(filePath) {
     const headers = [];
     sheet.getRow(1).eachCell({ includeEmpty: false }, (cell, column) => { headers[column] = cellText(cell).trim(); });
     const records = [];
-    for (let rowNumber = 2; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
+    for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
       const row = sheet.getRow(rowNumber);
       const values = {};
       headers.forEach((header, column) => { if (header) values[header] = cellText(row.getCell(column)); });

@@ -539,7 +539,7 @@ function editValues(client) {
   };
 }
 
-function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember, onSetCaseStatus, onNoteAdded }) {
+function ClientDetails({ client, courtDates, onClose, onUpdate, onDelete, onSetTeamMember, onSetCaseStatus, onNoteAdded }) {
   const clientCaseTypes = CASE_TYPES.filter((type) => isCaseTypeSelected(client.caseType, type));
   const [notes, setNotes] = useState([]);
   const [notesState, setNotesState] = useState('loading');
@@ -562,6 +562,24 @@ function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember,
     onNoteAdded(note);
   };
   const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmName, setConfirmName] = useState('');
+  const [deletedBy, setDeletedBy] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const nameConfirmed = confirmName.trim().toLowerCase().replace(/\s+/g, ' ') === client.name.trim().toLowerCase().replace(/\s+/g, ' ');
+
+  async function confirmDelete(event) {
+    event.preventDefault();
+    setDeleteBusy(true);
+    setDeleteError('');
+    try {
+      await onDelete(client, { confirmName, deletedBy });
+    } catch (deleteFailure) {
+      setDeleteError(deleteFailure.message);
+      setDeleteBusy(false);
+    }
+  }
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [form, setForm] = useState(() => editValues(client));
@@ -603,10 +621,18 @@ function ClientDetails({ client, courtDates, onClose, onUpdate, onSetTeamMember,
         <div className="drawer-header">
           <div><span className="eyebrow">CLIENT RECORD · {client.id || 'NO ID'}</span><h2 id="client-name">{client.name}</h2></div>
           <div className="detail-actions">
-            {editing ? <><button className="button button-secondary" type="button" onClick={cancel} disabled={saving}>Cancel</button><button className="button button-primary" type="submit" form="edit-client-form" disabled={saving}><Check size={15} />{saving ? 'Saving…' : 'Save'}</button></> : <button className="button button-secondary" type="button" onClick={() => setEditing(true)}><Pencil size={15} />Edit</button>}
+            {editing ? <><button className="button button-secondary" type="button" onClick={cancel} disabled={saving}>Cancel</button><button className="button button-primary" type="submit" form="edit-client-form" disabled={saving}><Check size={15} />{saving ? 'Saving…' : 'Save'}</button></> : <><button className="button button-secondary" type="button" onClick={() => { setDeleting(false); setEditing(true); }}><Pencil size={15} />Edit</button><button className="button button-secondary button-remove" type="button" onClick={() => { setDeleteError(''); setDeleting((open) => !open); }} aria-expanded={deleting} disabled={!client.id}><Trash2 size={15} />Delete</button></>}
             <button className="icon-button" onClick={onClose} aria-label="Close client details"><X size={18} /></button>
           </div>
         </div>
+        {deleting && !editing && <form className="delete-panel" onSubmit={confirmDelete}>
+          <strong>Delete {client.name}?</strong>
+          <p>This removes their row from MasterData and Client_Info, and from every case tab with its status and team member. Case notes and schedule appointments stay as history. The deletion is logged with your name and the time (Central). It can't be undone in the app.</p>
+          <label className="field">Type <b className="delete-name">{client.name}</b> to confirm<input value={confirmName} onChange={(event) => setConfirmName(event.target.value)} autoComplete="off" autoFocus aria-label="Type the client's name to confirm" /></label>
+          <label className="field">Deleted by<select value={deletedBy} onChange={(event) => setDeletedBy(event.target.value)} required><option value="" disabled>Choose…</option>{SCHEDULE_ADDED_BY.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
+          {deleteError && <div className="form-error" role="alert">{deleteError}</div>}
+          <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setDeleting(false)} disabled={deleteBusy}>Cancel</button><button className="button button-danger" type="submit" disabled={!nameConfirmed || !deletedBy || deleteBusy}><Trash2 size={15} />{deleteBusy ? 'Deleting…' : 'Delete permanently'}</button></div>
+        </form>}
         {editing ? <form id="edit-client-form" className="edit-client-form" onSubmit={save}>
           <div className="detail-status"><span className="eyebrow">EDIT CLIENT · {client.id}</span></div>
           <div className="form-grid detail-edit-grid">
@@ -2260,6 +2286,20 @@ export default function App() {
     if (ids.length) assignCaseType(ids, caseType, true);
   }
 
+  async function deleteClient(client, { confirmName, deletedBy }) {
+    const response = await fetch(`/api/clients/${encodeURIComponent(client.id)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmName, deletedBy }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not delete this client.');
+    setClients((current) => current.filter((item) => item.id !== client.id));
+    setSelectedClient(null);
+    setToast(`Deleted: ${client.name}`);
+    if (result.warning) setCaseError(result.warning);
+  }
+
   function createdClient(result) {
     setClients((current) => [...current, result.client].sort((left, right) => left.name.localeCompare(right.name)));
     setLastUpdated(result.modifiedAt);
@@ -2352,7 +2392,7 @@ export default function App() {
         </div>
       </main>
       {intakeOpen && <ClientForm onClose={() => setIntakeOpen(false)} onCreated={createdClient} />}
-      {selectedClient && <ClientDetails client={selectedClient} courtDates={courtDates} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} onNoteAdded={noteAdded} />}
+      {selectedClient && <ClientDetails client={selectedClient} courtDates={courtDates} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onDelete={deleteClient} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} onNoteAdded={noteAdded} />}
       {toast && <div className="toast"><span><Check size={15} /></span>{toast}</div>}
     </div>
   );

@@ -10,6 +10,9 @@ import { DEFAULT_CASE_STATUS, normalizeCaseStatus } from '../src/case-status.js'
 export const CLIENT_INFO_TAB = 'Client_Info';
 // Case notes are a running log: one row per note, stamped by the server in Central Time.
 export const NOTES_TAB = 'Case_Notes';
+// Who deleted which client and when. Case notes and schedule entries are kept as history.
+export const DELETED_TAB = 'Deleted_Clients';
+export const DELETED_HEADERS = ['Deleted At (CT)', 'Deleted By', 'Id', 'Client Name', 'Email', 'Phone', 'Case Types'];
 export const NOTE_HEADERS = ['Note ID', 'Id', 'Client Name', 'Case Type', 'Date & Time (CT)', 'Team Member', 'Note'];
 export const CLIENT_INFO_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Address', 'Current Address'];
 export const CASE_TAB_HEADERS = ['Id', 'First Name', 'Middle Name', 'Last Name', 'Email', 'Phone', 'Status', 'Team Member', 'Date Added'];
@@ -190,6 +193,32 @@ export function createCaseAssignments(tabs, setupMessage = '') {
 
   return {
     configured: Boolean(tabs),
+
+    // Writes the deletion log row first, so a removal is always traceable even if a later step fails.
+    logDeletion: ({ client, deletedBy, caseTypes }) => queued(async () => {
+      const map = await requireTabs().read([DELETED_TAB]);
+      const tab = await ensure(map.get(DELETED_TAB), DELETED_TAB, DELETED_HEADERS);
+      const deletedAt = centralTimestamp();
+      await requireTabs().append(tab, [rowFor(tab.headers, { 'Deleted At (CT)': deletedAt, 'Deleted By': deletedBy, Id: client.id, 'Client Name': client.name, Email: client.email || '', Phone: client.phone || '', 'Case Types': caseTypes })]);
+      return deletedAt;
+    }),
+
+    // Removes the client's row from Client_Info and from every case tab (with its status and team member).
+    removeClientRows: (clientId) => queued(async () => {
+      const map = await requireTabs().read([CLIENT_INFO_TAB, ...CASE_TYPES]);
+      const cleaned = [];
+      for (const [title, tab] of map) {
+        const idColumn = tab ? columnOf(tab.headers, 'Id') : -1;
+        if (idColumn === -1) continue;
+        const rowNumbers = tab.rows.map((row, index) => (String(row[idColumn] ?? '').trim() === clientId ? index + 2 : 0)).filter(Boolean);
+        if (!rowNumbers.length) continue;
+        await requireTabs().deleteRows(tab, rowNumbers);
+        map.set(title, { ...tab, rows: tab.rows.filter((row) => String(row[idColumn] ?? '').trim() !== clientId) });
+        cleaned.push(title);
+      }
+      remember(map);
+      return cleaned;
+    }),
 
     // Newest first. Filter by clientId and/or caseType.
     async listNotes({ clientId = '', caseType = '' } = {}) {

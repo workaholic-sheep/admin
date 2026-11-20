@@ -991,3 +991,18 @@ body { font-size: var(--type-body); }
 /* Keep each label and its box at the top of the row, even when the field next to it is taller
    (e.g. the password box with its "Generate" link), so the boxes line up. */
 .field { align-content: start; }
+
+/* Delete client confirmation */
+.delete-panel { display: grid; gap: 12px; margin: 16px 26px 0; padding: 16px; border: 1px solid #ecc6bc; border-radius: 6px; background: #fcf4f1; animation: appear .18s ease both; }
+.delete-panel > strong { color: #a5442f; font-size: var(--type-body); }
+.delete-panel > p { margin: 0; color: #7a4a3d; font-size: var(--type-small); line-height: 1.5; }
+.delete-panel .delete-name { color: #a5442f; }
+.delete-panel .reminder-actions { margin-top: 0; }
+.button-danger { background: #b4472f; color: #fff; }
+.button-danger:hover:not(:disabled) { background: #963a25; }
+.button-danger:disabled { opacity: .45; cursor: not-allowed; }
+@media (max-width: 760px) { .delete-panel { margin-right: 18px; margin-left: 18px; } }
+[data-theme="dark"] .delete-panel { background: #2e1f1b; border-color: #5c352c; }
+[data-theme="dark"] .delete-panel > strong, [data-theme="dark"] .delete-panel .delete-name { color: #ec9a85; }
+[data-theme="dark"] .delete-panel > p { color: #d9b3a8; }
+[data-theme="dark"] .button-danger { background: #a8432d; }

@@ -34,7 +34,7 @@ function rowsAsObjects(sheet) {
   });
 
   const results = [];
-  for (let rowNumber = HEADER_ROW + 1; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
+  for (let rowNumber = HEADER_ROW + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber);
     const record = {};
     for (const [column, header] of headers) {
@@ -189,7 +189,7 @@ export async function readCourtDates(filePath, sheetName = 'COURT DATE LIST ') {
   const additionalNoteColumn = exactColumn('NOTE');
   const result = [];
 
-  for (let rowNumber = 2; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
+  for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const row = sheet.getRow(rowNumber);
     const clientName = cellText(row.getCell(column('NAME')));
     if (!clientName) continue;
@@ -237,7 +237,7 @@ function findColumn(sheet, ...labels) {
 
 function nextClientId(sheet) {
   let largest = 0;
-  for (let rowNumber = HEADER_ROW + 1; rowNumber <= sheet.actualRowCount; rowNumber += 1) {
+  for (let rowNumber = HEADER_ROW + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
     const value = cellText(sheet.getRow(rowNumber).getCell(findColumn(sheet, ...ID_HEADERS)));
     const match = value.match(/^CL-(\d+)$/i);
     if (match) largest = Math.max(largest, Number(match[1]));
@@ -471,7 +471,7 @@ async function addClientToWorkbook(filePath, input) {
   const clientId = nextClientId(master);
   const now = new Date();
   const createdOn = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const rowNumber = master.actualRowCount + 1;
+  const rowNumber = master.rowCount + 1;
   const nextContact = dateFromInput(input.nextContactDate);
   const daysUntilNextContact = nextContact ? Math.round((nextContact - createdOn) / 86400000) : '';
   const nextContactLetter = columnName(findColumn(master, 'Next date of Contact') || 11);
@@ -546,7 +546,7 @@ async function updateClientInWorkbook(filePath, clientId, input) {
   if (!master) throw new Error('The workbook must contain a MasterData sheet.');
   const idColumn = findColumn(master, ...ID_HEADERS);
   let rowNumber = 0;
-  for (let currentRow = HEADER_ROW + 1; currentRow <= master.actualRowCount; currentRow += 1) {
+  for (let currentRow = HEADER_ROW + 1; currentRow <= master.rowCount; currentRow += 1) {
     if (cellText(master.getRow(currentRow).getCell(idColumn)) === clientId) rowNumber = currentRow;
   }
   if (!rowNumber) throw new Error('Client not found.');
@@ -592,7 +592,7 @@ async function completeFollowUpInWorkbook(filePath, clientId) {
   const idColumn = findColumn(master, ...ID_HEADERS);
   const nextContactColumn = findColumn(master, 'Next date of Contact');
   let rowNumber = 0;
-  for (let currentRow = HEADER_ROW + 1; currentRow <= master.actualRowCount; currentRow += 1) {
+  for (let currentRow = HEADER_ROW + 1; currentRow <= master.rowCount; currentRow += 1) {
     if (cellText(master.getRow(currentRow).getCell(idColumn)) === clientId) rowNumber = currentRow;
   }
   if (!rowNumber) throw new Error('Client not found.');
@@ -608,6 +608,29 @@ async function completeFollowUpInWorkbook(filePath, clientId) {
   updateWorksheetCells(archive, masterPath, rowNumber, [[nextContactColumn, 'done']]);
   await replaceWorkbookFile(filePath, archive);
   return (await readClients(filePath)).find((client) => client.id === clientId);
+}
+
+// Local workbook only: blanks the client's MasterData row rather than removing it, because rows are
+// edited in the file's XML to keep its formatting. Rows without a name are already skipped when reading.
+async function removeClientFromWorkbook(filePath, clientId) {
+  const workbook = await loadWorkbook(filePath);
+  const master = workbook.getWorksheet(MASTER_SHEET);
+  if (!master) throw new Error('The workbook must contain a MasterData sheet.');
+  const idColumn = findColumn(master, ...ID_HEADERS);
+  let rowNumber = 0;
+  for (let currentRow = HEADER_ROW + 1; currentRow <= master.rowCount; currentRow += 1) {
+    if (cellText(master.getRow(currentRow).getCell(idColumn)) === clientId) rowNumber = currentRow;
+  }
+  if (!rowNumber) throw new Error('Client not found.');
+  const client = (await readClients(filePath)).find((item) => item.id === clientId);
+  const columns = [];
+  master.getRow(HEADER_ROW).eachCell({ includeEmpty: false }, (_cell, column) => columns.push([column, '']));
+  const archive = unzipSync(new Uint8Array(await readFile(filePath)));
+  const masterPath = worksheetPaths(archive).get(MASTER_SHEET);
+  if (!masterPath) throw new Error('Could not find the MasterData worksheet in the workbook.');
+  updateWorksheetCells(archive, masterPath, rowNumber, columns);
+  await replaceWorkbookFile(filePath, archive);
+  return client;
 }
 
 export function createWorkbookStore(filePath, courtWorkbookPath = filePath) {
@@ -626,6 +649,11 @@ export function createWorkbookStore(filePath, courtWorkbookPath = filePath) {
     },
     update(clientId, input) {
       const operation = writeQueue.then(() => updateClientInWorkbook(filePath, clientId, input));
+      writeQueue = operation.catch(() => {});
+      return operation;
+    },
+    remove(clientId) {
+      const operation = writeQueue.then(() => removeClientFromWorkbook(filePath, clientId));
       writeQueue = operation.catch(() => {});
       return operation;
     },
