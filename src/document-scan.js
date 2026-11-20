@@ -253,7 +253,9 @@ export function parseDocumentText(text) {
 }
 
 // Upscales and grayscales the photo, which noticeably improves Tesseract on phone pictures of cards.
-async function prepareImage(file) {
+// Small screen text reads far better enlarged: screenshots use a larger target (about 3× for a
+// typical 800px capture) than ID photos.
+async function prepareImage(file, { targetSize = 1400, maxScale = 2.5 } = {}) {
   let bitmap;
   try {
     bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
@@ -261,7 +263,7 @@ async function prepareImage(file) {
     throw new Error('This image could not be opened. Use a JPG, PNG, or WebP photo.');
   }
   const longest = Math.max(bitmap.width, bitmap.height);
-  const scale = Math.min(2.5, Math.max(1, 1400 / longest));
+  const scale = Math.min(maxScale, Math.max(1, targetSize / longest));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(bitmap.width * scale);
   canvas.height = Math.round(bitmap.height * scale);
@@ -307,6 +309,30 @@ function getWorker() {
 // Downloads and starts the OCR engine in the background so the first scan does not wait for it.
 export function warmUpScanner() {
   getWorker().catch(() => {});
+}
+
+// Raw text of a screenshot (e.g. an EOIR case page). Each `mode` is a Tesseract page layout:
+// 6 reads the image as one block, keeping "Label: value" pairs on the same line; 4 is tried as well
+// when the caller says the first reading is missing something.
+export async function readImageText(file, { onProgress = () => {}, isComplete = () => true } = {}) {
+  if (!file?.type?.startsWith('image/')) throw new Error('Use a screenshot or image (PNG, JPG or WebP).');
+  onProgress(0, 'Preparing image');
+  const [image, worker] = await Promise.all([prepareImage(file, { targetSize: 2400, maxScale: 3 }), getWorker().then((ready) => {
+    onProgress(0.1, 'Reading text');
+    return ready;
+  })]);
+  const read = async (mode, start, label) => {
+    reportProgress = (value) => onProgress(start + value * 0.45, label);
+    await worker.setParameters({ tessedit_pageseg_mode: mode });
+    return (await worker.recognize(image)).data.text;
+  };
+  try {
+    const first = await read('6', 0.1, 'Reading text');
+    if (isComplete(first)) return [first];
+    return [first, await read('4', 0.55, 'Reading again')];
+  } finally {
+    reportProgress = () => {};
+  }
 }
 
 export async function scanDocument(file, onProgress = () => {}) {

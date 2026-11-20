@@ -1006,3 +1006,19 @@ body { font-size: var(--type-body); }
 [data-theme="dark"] .delete-panel > strong, [data-theme="dark"] .delete-panel .delete-name { color: #ec9a85; }
 [data-theme="dark"] .delete-panel > p { color: #d9b3a8; }
 [data-theme="dark"] .button-danger { background: #a8432d; }
+.bulk-delete-panel { flex: 1 1 100%; margin: 4px 0 0; }
+.bulk-delete-names { color: #a5442f !important; font-weight: 600; }
+.bulk-delete-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 760px) { .bulk-delete-panel { margin: 4px 0 0; } .bulk-delete-fields { grid-template-columns: 1fr; } }
+[data-theme="dark"] .bulk-delete-names { color: #ec9a85 !important; }
+
+/* EOIR screenshot scan on the Work Permit page */
+.eoir-scan { margin: 0 0 14px; }
+.eoir-scan kbd { padding: 1px 5px; border: 1px solid #cfd8cf; border-bottom-width: 2px; border-radius: 3px; background: #fff; font: 600 11px 'DM Sans', sans-serif; }
+.scan-notice { display: grid; gap: 4px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid #b9d0e6; border-radius: 5px; background: #e8f1fa; color: #2f4f6e; font-size: var(--type-small); line-height: 1.45; }
+.scan-notice strong { color: #2f6496; font-size: var(--type-label); }
+.scan-warning { margin-top: 2px; padding: 6px 8px; border-radius: 4px; background: #f7eee1; color: #8f6224; }
+[data-theme="dark"] .eoir-scan kbd { background: var(--d-raised); border-color: #34413b; color: var(--d-text); }
+[data-theme="dark"] .scan-notice { background: #1b2a38; border-color: #2f4c66; color: #b9d3ea; }
+[data-theme="dark"] .scan-notice strong { color: #93c1ea; }
+[data-theme="dark"] .scan-warning { background: #3a2f1e; color: #e2b56e; }

@@ -578,7 +578,18 @@ app.post('/api/clients', async (request, response, next) => {
       return response.status(400).json({ error: 'Enter a valid email address.' });
     }
 
+    // Deleted clients' IDs stay reserved: their notes and appointments still point at them.
+    let reservedIds = [];
+    if (cases.configured) {
+      try {
+        reservedIds = await cases.deletedIds();
+      } catch (error) {
+        console.error(error);
+        return response.status(503).json({ error: `Could not check the deletion log before choosing a new client ID: ${error.message}` });
+      }
+    }
     const client = await store.add({
+      reservedIds,
       name,
       email,
       phone: String(input.phone || '').trim(),
@@ -624,25 +635,75 @@ app.delete('/api/clients/:clientId', async (request, response, next) => {
     const client = (await store.list()).find((item) => item.id === clientId);
     if (!client) return response.status(404).json({ error: 'Client not found. They may already have been deleted.' });
     if (comparableName(confirmName) !== comparableName(client.name)) return response.status(400).json({ error: `Type the client's name exactly as shown (${client.name}) to confirm.` });
-    if (!cases.configured) return response.status(503).json({ error: 'Deleting needs the Clients_Additional_Info spreadsheet, where deletions are logged. Connect it first.' });
-    const { assignments } = await caseAssignments();
-    const caseTypes = withCaseTypes(client, assignments).caseType;
-    const deletedAt = await cases.logDeletion({ client, deletedBy, caseTypes });
-    await store.remove(clientId);
-    let warning = '';
-    try {
-      await cases.removeClientRows(clientId);
-    } catch (error) {
-      console.error(error);
-      warning = `${client.name} was removed from MasterData, but their rows in Client_Info or the case tabs could not be cleared: ${error.message}`;
-    }
-    lastSync = 0;
-    response.json({ deleted: { id: client.id, name: client.name, deletedAt, deletedBy }, warning });
+    if (!cases.configured) return response.status(503).json({ error: DELETE_NEEDS_LOG });
+    response.json(await deleteClient(client, deletedBy));
   } catch (error) {
-    if (error instanceof CaseSetupError) return response.status(503).json({ error: error.message });
-    if (error.message === 'Client not found.') return response.status(404).json({ error: error.message });
-    if (error.message.includes('changed while deleting')) return response.status(409).json({ error: error.message });
-    if (error.message.includes('locked by Excel')) return response.status(423).json({ error: error.message });
+    const status = deleteErrorStatus(error);
+    if (status) return response.status(status).json({ error: error.message });
+    next(error);
+  }
+});
+
+const DELETE_NEEDS_LOG = 'Deleting needs the Clients_Additional_Info spreadsheet, where deletions are logged. Connect it first.';
+const BULK_DELETE_LIMIT = 100;
+
+function deleteErrorStatus(error) {
+  if (error instanceof CaseSetupError) return 503;
+  if (error.message === 'Client not found.') return 404;
+  if (error.message.includes('changed while deleting')) return 409;
+  if (error.message.includes('locked by Excel')) return 423;
+  return 0;
+}
+
+// One deletion: log it, remove the MasterData row, then clear Client_Info and the case tabs.
+async function deleteClient(client, deletedBy) {
+  const { assignments } = await caseAssignments();
+  const caseTypes = withCaseTypes(client, assignments).caseType;
+  const deletedAt = await cases.logDeletion({ client, deletedBy, caseTypes });
+  await store.remove(client.id);
+  let warning = '';
+  try {
+    await cases.removeClientRows(client.id);
+  } catch (error) {
+    console.error(error);
+    warning = `${client.name} was removed from MasterData, but their rows in Client_Info or the case tabs could not be cleared: ${error.message}`;
+  }
+  lastSync = 0;
+  return { deleted: { id: client.id, name: client.name, deletedAt, deletedBy }, warning };
+}
+
+// Bulk delete from the client list: confirmed by typing DELETE. Clients are deleted one by one;
+// a failure is reported for that client and the rest carry on.
+app.post('/api/clients/bulk-delete', async (request, response, next) => {
+  const deletedBy = String(request.body?.deletedBy || '').trim();
+  const ids = Array.isArray(request.body?.clientIds) ? [...new Set(request.body.clientIds.map(String))] : [];
+  if (String(request.body?.confirm || '').trim() !== 'DELETE') return response.status(400).json({ error: 'Type DELETE to confirm.' });
+  if (!SCHEDULE_ADDED_BY.includes(deletedBy)) return response.status(400).json({ error: 'Choose who is deleting these clients.' });
+  if (!ids.length) return response.status(400).json({ error: 'Choose at least one client.' });
+  if (ids.length > BULK_DELETE_LIMIT) return response.status(400).json({ error: `Delete at most ${BULK_DELETE_LIMIT} clients at a time.` });
+  if (!cases.configured) return response.status(503).json({ error: DELETE_NEEDS_LOG });
+  try {
+    const roster = new Map((await store.list()).map((client) => [client.id, client]));
+    const deleted = [];
+    const failed = [];
+    const warnings = [];
+    for (const id of ids) {
+      const client = roster.get(id);
+      if (!client) {
+        failed.push({ id, name: id, error: 'Not found. They may already have been deleted.' });
+        continue;
+      }
+      try {
+        const result = await deleteClient(client, deletedBy);
+        deleted.push(result.deleted);
+        if (result.warning) warnings.push(result.warning);
+      } catch (error) {
+        if (!deleteErrorStatus(error)) console.error(error);
+        failed.push({ id, name: client.name, error: error.message });
+      }
+    }
+    response.json({ deleted, failed, warnings });
+  } catch (error) {
     next(error);
   }
 });

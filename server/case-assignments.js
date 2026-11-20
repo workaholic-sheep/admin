@@ -203,6 +203,12 @@ export function createCaseAssignments(tabs, setupMessage = '') {
       return deletedAt;
     }),
 
+    // IDs of every client ever deleted, so new clients never reuse one.
+    async deletedIds() {
+      const tab = (await requireTabs().read([DELETED_TAB])).get(DELETED_TAB);
+      return [...idsIn(tab)];
+    },
+
     // Removes the client's row from Client_Info and from every case tab (with its status and team member).
     removeClientRows: (clientId) => queued(async () => {
       const map = await requireTabs().read([CLIENT_INFO_TAB, ...CASE_TYPES]);

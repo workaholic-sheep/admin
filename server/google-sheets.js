@@ -279,8 +279,9 @@ export function createGoogleSheetStore({
       throw new Error('A client with this email already exists.');
     }
 
-    const nextId = clients.reduce((largest, client) => {
-      const match = client.id.match(/^CL-(\d+)$/i);
+    // Above every ID in MasterData and every deleted ID, so a deleted client's ID is never reused.
+    const nextId = [...clients.map((client) => client.id), ...(input.reservedIds || [])].reduce((largest, id) => {
+      const match = String(id).match(/^CL-(\d+)$/i);
       return match ? Math.max(largest, Number(match[1])) : largest;
     }, 0) + 1;
     const clientId = `CL-${String(nextId).padStart(3, '0')}`;

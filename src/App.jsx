@@ -49,7 +49,8 @@ import {
 } from 'lucide-react';
 import { CASE_TYPES, countCaseTypes, isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
 import { pageFromPath, pathForPage } from './routes.js';
-import { scanDocument, warmUpScanner } from './document-scan.js';
+import { readImageText, scanDocument, warmUpScanner } from './document-scan.js';
+import { applyEoirScan, eoirScanFound, parseEoirText } from './eoir-scan.js';
 import { SCHEDULE_ADDED_BY, TEAM_MEMBERS } from './team.js';
 import { splitName } from './names.js';
 import { CASE_STATUSES, caseStatusTone } from './case-status.js';
@@ -372,6 +373,99 @@ function DocumentScanner({ onScanned }) {
       <input ref={inputRef} type="file" accept="image/*" hidden onChange={choose} />
       <button type="button" className="button button-secondary" onClick={() => inputRef.current?.click()} disabled={scanning}>
         {scanning ? <LoaderCircle size={15} className="spin" /> : <Upload size={15} />}{preview && !scanning ? 'Scan another' : 'Upload'}
+      </button>
+    </div>
+  );
+}
+
+// Combines two OCR readings of an EOIR screenshot, keeping the first value found for each field.
+function mergeEoirScans(scans) {
+  const [first, ...rest] = scans;
+  const fields = { ...first.fields };
+  for (const scan of rest) {
+    for (const [key, value] of Object.entries(scan.fields)) if ((fields[key] === '' || fields[key] === null) && value !== '' && value !== null) fields[key] = value;
+  }
+  const events = scans.map((scan) => scan.events).sort((left, right) => right.length - left.length)[0];
+  return { fields, events };
+}
+
+// Reads an EOIR "Asylum EAD Clock Information" screenshot: paste it (Ctrl+V) anywhere on the
+// Work Permit page, drop it here, or upload it. It is read on this computer and never uploaded.
+function EoirScanner({ onScanned }) {
+  const inputRef = useRef(null);
+  const [state, setState] = useState('idle');
+  const [progress, setProgress] = useState({ value: 0, label: '' });
+  const [message, setMessage] = useState('');
+  const [dragging, setDragging] = useState(false);
+  const [rawText, setRawText] = useState('');
+  const busy = useRef(false);
+
+  useEffect(() => warmUpScanner(), []);
+
+  async function read(file) {
+    if (!file || busy.current) return;
+    busy.current = true;
+    setState('scanning');
+    setMessage('');
+    setRawText('');
+    setProgress({ value: 0, label: 'Preparing image' });
+    try {
+      const texts = await readImageText(file, {
+        onProgress: (value, label) => setProgress({ value, label }),
+        isComplete: (text) => {
+          const { fields } = parseEoirText(text);
+          return Boolean(fields.aNumber && fields.name && fields.filingDate && fields.asOf && fields.clockDays !== null);
+        },
+      });
+      setRawText(texts.join('\n\n----- second reading -----\n\n'));
+      const scan = mergeEoirScans(texts.map(parseEoirText));
+      if (!eoirScanFound(scan)) {
+        setState('empty');
+        setMessage('This doesn’t look like the EOIR Asylum EAD Clock screen. Capture the whole window, including the A-Number, Name and Init Asylum Rec’d Date.');
+        return;
+      }
+      setState('done');
+      setMessage(onScanned(scan));
+    } catch (scanError) {
+      setState('error');
+      setMessage(scanError.message || 'This screenshot could not be read.');
+    } finally {
+      busy.current = false;
+    }
+  }
+
+  // Ctrl+V of a screenshot anywhere on the page; text pastes into fields are left alone.
+  useEffect(() => {
+    const onPaste = (event) => {
+      const item = [...(event.clipboardData?.items || [])].find((entry) => entry.kind === 'file' && entry.type.startsWith('image/'));
+      if (!item) return;
+      event.preventDefault();
+      read(item.getAsFile());
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  });
+
+  const scanning = state === 'scanning';
+  const percent = Math.round(progress.value * 100);
+  return (
+    <div
+      className={`document-scan eoir-scan is-${state}${dragging ? ' is-dragging' : ''}`}
+      onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => { event.preventDefault(); setDragging(false); read(event.dataTransfer.files?.[0]); }}
+    >
+      <span className="document-scan-icon"><ScanText size={20} /></span>
+      <div className="document-scan-body" aria-live="polite">
+        <strong>{scanning ? `${progress.label}… ${percent}%` : 'Add or update from an EOIR screenshot'}</strong>
+        {scanning
+          ? <span className="clock-bar"><i style={{ width: `${percent}%` }} /></span>
+          : <span>{message || <>Paste a screenshot of the <b>EOIR Asylum EAD Clock Information</b> window with <kbd>Ctrl</kbd>+<kbd>V</kbd>, drop it here, or upload it. It is read on this computer and never uploaded.</>}</span>}
+        {!scanning && rawText && <details className="document-scan-text"><summary>Show text read</summary><pre>{rawText}</pre></details>}
+      </div>
+      <input ref={inputRef} type="file" accept="image/*" hidden onChange={(event) => { read(event.target.files?.[0]); event.target.value = ''; }} />
+      <button type="button" className="button button-secondary" onClick={() => inputRef.current?.click()} disabled={scanning}>
+        {scanning ? <LoaderCircle size={15} className="spin" /> : <Upload size={15} />}{state === 'idle' ? 'Upload' : 'Scan another'}
       </button>
     </div>
   );
@@ -1039,6 +1133,8 @@ function WorkPermitList({ clients = [], onToast }) {
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState('');
   const [shared, setShared] = useState(null);
+  const [scanNotice, setScanNotice] = useState(null);
+  const formRef = useRef(null);
 
   const replace = (record) => setRecords((current) => current.map((item) => item.id === record.id ? record : item));
 
@@ -1053,16 +1149,37 @@ function WorkPermitList({ clients = [], onToast }) {
     setEditing('new');
     setForm(emptyPermitForm);
     setFormError('');
+    setScanNotice(null);
   }
+
+  const formFor = (record) => ({
+    ...emptyPermitForm,
+    ...Object.fromEntries(Object.keys(emptyPermitForm).map((key) => [key, record[key] ?? emptyPermitForm[key]])),
+    section: record.section || 'Regular',
+  });
 
   function startEdit(record) {
     setEditing(record.id);
-    setForm({
-      ...emptyPermitForm,
-      ...Object.fromEntries(Object.keys(emptyPermitForm).map((key) => [key, record[key] ?? emptyPermitForm[key]])),
-      section: record.section || 'Regular',
-    });
+    setForm(formFor(record));
     setFormError('');
+    setScanNotice(null);
+  }
+
+  // An EOIR screenshot updates the record with the same A-Number (or, failing that, the same name);
+  // otherwise it starts a new one. Nothing is saved until staff check the form and press Save.
+  function fromEoir(scan) {
+    const digits = (value) => String(value || '').replace(/\D/g, '').replace(/^0+/, '');
+    const nameKey = (value) => String(value || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
+    const match = (scan.fields.aNumber && records.find((record) => digits(record.aNumber) && digits(record.aNumber) === digits(scan.fields.aNumber)))
+      || (scan.fields.name && records.find((record) => nameKey(record.name) === nameKey(scan.fields.name)))
+      || null;
+    const { next, filled, clockStopped } = applyEoirScan(match ? formFor(match) : emptyPermitForm, scan);
+    setEditing(match ? match.id : 'new');
+    setForm(next);
+    setFormError('');
+    setScanNotice({ match, filled, clockStopped: clockStopped && match?.clockStatus !== 'Paused', clockDays: scan.fields.clockDays, asOf: scan.fields.asOf });
+    window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    return match ? `Matched ${match.name} (${match.id}). Check the form below and press Save changes.` : 'New client. Check the form below and press Add client.';
   }
 
   function update(event) {
@@ -1083,6 +1200,7 @@ function WorkPermitList({ clients = [], onToast }) {
       if (isNew) setRecords((current) => [...current, result.workPermit]);
       else replace(result.workPermit);
       setEditing(null);
+      setScanNotice(null);
       onToast(`${result.workPermit.name} ${isNew ? `added as ${result.workPermit.id}` : 'updated'}`);
     } catch (saveError) {
       setFormError(saveError.message);
@@ -1186,12 +1304,18 @@ function WorkPermitList({ clients = [], onToast }) {
   return (
     <>
       <div className="welcome-row roster-heading"><div><span className="eyebrow">WORK PERMITS · {records.length} RECORDS · {actionCount} NEED ACTION · {activeCount} WITH WORK PERMIT · {pendingCount} PENDING</span><h1>Work permit tracker</h1><p className="page-subtitle">{visible.length} records shown</p></div><button className="button button-primary" onClick={startAdd} disabled={status !== 'ready'}><Plus size={16} />Add client</button></div>
+      <EoirScanner onScanned={fromEoir} />
       {shared && <div className="surface share-panel" role="status">
         <div><strong>{shared.copied ? 'Link copied' : 'Copy this link'} for {shared.name}</strong><span>Anyone with this link can see this client's 150-day progress. Internal notes stay hidden.</span></div>
         <input readOnly value={shared.url} onFocus={(event) => event.target.select()} aria-label={`Tracking link for ${shared.name}`} />
         <button className="icon-button" onClick={() => setShared(null)} aria-label="Close"><X size={15} /></button>
       </div>}
-      {editing && <form className="surface reminder-form" onSubmit={save}>
+      {editing && <form className="surface reminder-form" onSubmit={save} ref={formRef}>
+        {scanNotice && <div className="scan-notice" role="status">
+          <strong>{scanNotice.match ? `Updating ${scanNotice.match.name} (${scanNotice.match.id}) from the EOIR screenshot` : 'New client from the EOIR screenshot'}</strong>
+          <span>Filled: {scanNotice.filled.join(', ')}.{scanNotice.clockDays !== null && scanNotice.asOf ? ` Days paused is set so the clock shows ${scanNotice.clockDays} days on ${formatDate(scanNotice.asOf)}, matching EOIR.` : ''} Check everything, then save.</span>
+          {scanNotice.clockStopped && <span className="scan-warning">EOIR shows the clock <b>stopped</b>. After saving, press <b>Pause</b> on this record so the app stops counting too.</span>}
+        </div>}
         <div className="form-grid">
           <label className="field">Client name<NameSuggest value={form.name} clients={clients} onChange={(name) => setForm((current) => ({ ...current, name }))} onPick={(client) => setForm((current) => ({ ...current, name: client.name }))} />
             {duplicate && <span className="field-hint">Already in work permits as {duplicate.id}.</span>}</label>
@@ -1203,7 +1327,7 @@ function WorkPermitList({ clients = [], onToast }) {
           <label className="field field-wide">Internal note (never shown to the client)<textarea name="note" value={form.note} onChange={update} rows={3} maxLength={2000} /></label>
         </div>
         {formError && <div className="form-error" role="alert">{formError}</div>}
-        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setEditing(null)}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : editing === 'new' ? 'Add client' : 'Save changes'}</button></div>
+        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => { setEditing(null); setScanNotice(null); }}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : editing === 'new' ? 'Add client' : 'Save changes'}</button></div>
       </form>}
       <section className="surface roster-surface">
         <div className="roster-toolbar">
@@ -1827,7 +1951,7 @@ function CaseClientPicker({ clients, caseType, onAdd }) {
   );
 }
 
-function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, onSetTeamMember, onSetCaseStatus, notesVersion = 0, view = 'clients' }) {
+function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseType, onDeleteClients, onSetTeamMember, onSetCaseStatus, notesVersion = 0, view = 'clients' }) {
   // MasterData columns can come and go; only show the ones that have data for someone.
   const hasFrequency = clients.some((client) => client.frequency);
   const hasNextContact = clients.some((client) => client.nextContactDate);
@@ -1856,6 +1980,29 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
   }, [noteCaseType, notesVersion]);
   const [selected, setSelected] = useState(() => new Set());
   const [assigning, setAssigning] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkConfirm, setBulkConfirm] = useState('');
+  const [bulkDeletedBy, setBulkDeletedBy] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState('');
+  const selectedNames = clients.filter((client) => selected.has(client.id)).map((client) => client.name);
+
+  async function confirmBulkDelete(event) {
+    event.preventDefault();
+    setBulkBusy(true);
+    setBulkError('');
+    try {
+      const { deleted, failed } = await onDeleteClients([...selected], bulkDeletedBy);
+      const gone = new Set(deleted.map((client) => client.id));
+      setSelected((current) => new Set([...current].filter((id) => !gone.has(id))));
+      if (failed.length) setBulkError(`Not deleted: ${failed.map((item) => `${item.name} (${item.error})`).join('; ')}`);
+      else { setBulkDeleting(false); setBulkConfirm(''); }
+    } catch (error) {
+      setBulkError(error.message);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
   const [frequency, setFrequency] = useState('All frequencies');
   const [payment, setPayment] = useState('All payment statuses');
   const [sortOrder, setSortOrder] = useState('name');
@@ -1945,8 +2092,20 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
           <strong>{selected.size} selected</strong>
           <FilterMenu label="Add selected clients to a case type" value="" onChange={(type) => assign([...selected], type, true)} icon={Plus} options={[{ value: '', label: assigning ? 'Saving…' : 'Add to…' }, ...CASE_TYPES.map((type) => ({ value: type, label: type }))]} />
           {caseType && <button className="button button-secondary button-remove" type="button" disabled={assigning} onClick={() => assign([...selected], caseType, false)}><X size={14} />Remove from {caseType}</button>}
-          <button className="text-button" type="button" onClick={() => setSelected(new Set())}>Clear selection</button>
+          <button className="button button-secondary button-remove" type="button" onClick={() => { setBulkError(''); setBulkDeleting((open) => !open); }} aria-expanded={bulkDeleting}><Trash2 size={14} />Delete {selected.size === 1 ? 'client' : `${selected.size} clients`}</button>
+          <button className="text-button" type="button" onClick={() => { setSelected(new Set()); setBulkDeleting(false); }}>Clear selection</button>
           <span className="selection-hint">or drag them onto a case type in the sidebar</span>
+          {bulkDeleting && <form className="delete-panel bulk-delete-panel" onSubmit={confirmBulkDelete}>
+            <strong>Delete {selected.size === 1 ? '1 client' : `${selected.size} clients`}?</strong>
+            <p className="bulk-delete-names">{selectedNames.slice(0, 12).join(', ')}{selectedNames.length > 12 ? `, and ${selectedNames.length - 12} more` : ''}</p>
+            <p>Each one is removed from MasterData, Client_Info and every case tab (with status and team member). Case notes and schedule appointments stay as history. Every deletion is logged with your name and the time (Central). This can’t be undone in the app.</p>
+            <div className="bulk-delete-fields">
+              <label className="field">Type <b className="delete-name">DELETE</b> to confirm<input value={bulkConfirm} onChange={(event) => setBulkConfirm(event.target.value)} autoComplete="off" autoFocus /></label>
+              <label className="field">Deleted by<select value={bulkDeletedBy} onChange={(event) => setBulkDeletedBy(event.target.value)} required><option value="" disabled>Choose…</option>{SCHEDULE_ADDED_BY.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
+            </div>
+            {bulkError && <div className="form-error" role="alert">{bulkError}</div>}
+            <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setBulkDeleting(false)} disabled={bulkBusy}>Cancel</button><button className="button button-danger" type="submit" disabled={bulkConfirm.trim() !== 'DELETE' || !bulkDeletedBy || bulkBusy}><Trash2 size={15} />{bulkBusy ? `Deleting ${selected.size}…` : 'Delete permanently'}</button></div>
+          </form>}
         </div>
         : <p className="drag-hint"><GripVertical size={14} />{caseType ? `Drag clients from the All clients list on the right into this list to add them to ${caseType}.` : 'Tip: drag a client onto a case type in the sidebar, or tick several and drag them together.'}</p>}
       <div className={caseType ? 'case-layout' : undefined}>
@@ -2300,6 +2459,23 @@ export default function App() {
     if (result.warning) setCaseError(result.warning);
   }
 
+  // Bulk delete from the client list; returns which were deleted and which failed.
+  async function bulkDeleteClients(clientIds, deletedBy) {
+    const response = await fetch('/api/clients/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientIds, deletedBy, confirm: 'DELETE' }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not delete these clients.');
+    const gone = new Set(result.deleted.map((client) => client.id));
+    setClients((current) => current.filter((client) => !gone.has(client.id)));
+    setSelectedClient((current) => (current && gone.has(current.id) ? null : current));
+    if (result.deleted.length) setToast(result.deleted.length === 1 ? `Deleted: ${result.deleted[0].name}` : `Deleted ${result.deleted.length} clients`);
+    if (result.warnings?.length) setCaseError(result.warnings.join(' '));
+    return result;
+  }
+
   function createdClient(result) {
     setClients((current) => [...current, result.client].sort((left, right) => left.name.localeCompare(right.name)));
     setLastUpdated(result.modifiedAt);
@@ -2372,7 +2548,7 @@ export default function App() {
           {page === 'dashboard'
             ? <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onShowSchedule={() => setPage('schedule')} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />
             : page === 'clients'
-              ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} />
+              ? <ClientList clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onDeleteClients={bulkDeleteClients} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} />
               : page === 'work-permits'
                 ? <WorkPermitList clients={clients} onToast={setToast} />
               : page === 'payments'
@@ -2380,7 +2556,7 @@ export default function App() {
               : page === 'court-dates' || resultView === 'court-dates'
                 ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
                 : resultView
-                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} notesVersion={notesVersion} view={resultView} />
+                  ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onDeleteClients={bulkDeleteClients} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} notesVersion={notesVersion} view={resultView} />
               : page === 'schedule'
                 ? <SchedulePage clients={clients} onSelectClient={setSelectedClient} onToast={setToast} />
               : page === 'credentials'

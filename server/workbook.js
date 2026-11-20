@@ -235,13 +235,14 @@ function findColumn(sheet, ...labels) {
   return result;
 }
 
-function nextClientId(sheet) {
-  let largest = 0;
+// Next CL-number above every ID in MasterData and every reserved (deleted) ID, so a deleted
+// client's ID is never handed to someone new along with their old notes and appointments.
+function nextClientId(sheet, reservedIds = []) {
+  const ids = [...reservedIds];
   for (let rowNumber = HEADER_ROW + 1; rowNumber <= sheet.rowCount; rowNumber += 1) {
-    const value = cellText(sheet.getRow(rowNumber).getCell(findColumn(sheet, ...ID_HEADERS)));
-    const match = value.match(/^CL-(\d+)$/i);
-    if (match) largest = Math.max(largest, Number(match[1]));
+    ids.push(cellText(sheet.getRow(rowNumber).getCell(findColumn(sheet, ...ID_HEADERS))));
   }
+  const largest = ids.reduce((max, value) => Math.max(max, Number(String(value).match(/^CL-(\d+)$/i)?.[1] || 0)), 0);
   return `CL-${String(largest + 1).padStart(3, '0')}`;
 }
 
@@ -468,7 +469,7 @@ async function addClientToWorkbook(filePath, input) {
     throw new Error('A client with this email already exists.');
   }
 
-  const clientId = nextClientId(master);
+  const clientId = nextClientId(master, input.reservedIds);
   const now = new Date();
   const createdOn = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const rowNumber = master.rowCount + 1;
