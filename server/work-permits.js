@@ -21,7 +21,24 @@ export const WORK_PERMIT_HEADERS = [
   'ClientID', 'ClientName', 'OriginalNote', 'Section',
   'FilingDate', 'ClockStatus', 'PausedSince', 'PausedDays', 'TrackingToken',
   'ANumber', 'EADDecision', 'EADApprovedDate', 'EADExpiryDate',
+  // Same fields as the EOIR "Asylum EAD Clock Information" screen (a snapshot as of EOIRAsOf).
+  'NTADate', 'EOIRAsOf', 'EOIRClockStatus', 'EOIRClockDays', 'AsylumType', 'AsylumDecision',
+  'AppealFiledDate', 'DHSDaysAtReferral', 'DHSStatusAtReferral', 'EOIREvents',
 ];
+
+export const EOIR_CLOCK_STATUSES = ['Running', 'Stopped'];
+export const EOIR_EVENT_FIELDS = ['event', 'date', 'city', 'decision', 'action', 'elapsed', 'cumulative'];
+
+// EOIREvents holds one event per line: "Hearing | 2026-10-30 | CHI | 9V - Vacated … | Run | 30 | 85".
+export function parseEoirEvents(value) {
+  return String(value ?? '').split(/\r?\n/).map((line) => line.split('|').map((part) => part.trim()))
+    .filter((parts) => parts.some(Boolean))
+    .map((parts) => Object.fromEntries(EOIR_EVENT_FIELDS.map((field, index) => [field, parts[index] ?? ''])));
+}
+
+export function formatEoirEvents(events = []) {
+  return events.map((event) => EOIR_EVENT_FIELDS.map((field) => String(event[field] ?? '').replace(/[|\r\n]+/g, ' ').trim()).join(' | ')).join('\n');
+}
 
 export class WorkPermitError extends Error {
   constructor(message, status = 400) {
@@ -60,6 +77,16 @@ export function mapWorkPermit(row) {
     pausedSince: isDateKey(text(row.PausedSince)) ? text(row.PausedSince) : '',
     pausedDays: Number.isFinite(pausedDays) && pausedDays > 0 ? pausedDays : 0,
     trackingToken: text(row.TrackingToken),
+    ntaDate: dateOrBlank(row.NTADate),
+    eoirAsOf: dateOrBlank(row.EOIRAsOf),
+    eoirClockStatus: EOIR_CLOCK_STATUSES.find((value) => value.toLowerCase() === text(row.EOIRClockStatus).toLowerCase()) || '',
+    eoirClockDays: /^\d+$/.test(text(row.EOIRClockDays)) ? text(row.EOIRClockDays) : '',
+    asylumType: text(row.AsylumType),
+    asylumDecision: text(row.AsylumDecision),
+    appealFiledDate: dateOrBlank(row.AppealFiledDate),
+    dhsDaysAtReferral: /^\d+$/.test(text(row.DHSDaysAtReferral)) ? text(row.DHSDaysAtReferral) : '',
+    dhsStatusAtReferral: text(row.DHSStatusAtReferral),
+    eoirEvents: parseEoirEvents(row.EOIREvents),
   };
 }
 
@@ -78,6 +105,16 @@ export function workPermitCells(record) {
     EADDecision: record.decision === 'Pending' ? '' : record.decision,
     EADApprovedDate: record.decision === 'Approved' ? record.approvedDate : '',
     EADExpiryDate: record.decision === 'Approved' ? record.expiryDate : '',
+    NTADate: record.ntaDate || '',
+    EOIRAsOf: record.eoirAsOf || '',
+    EOIRClockStatus: record.eoirClockStatus || '',
+    EOIRClockDays: record.eoirClockDays || '',
+    AsylumType: record.asylumType || '',
+    AsylumDecision: record.asylumDecision || '',
+    AppealFiledDate: record.appealFiledDate || '',
+    DHSDaysAtReferral: record.dhsDaysAtReferral || '',
+    DHSStatusAtReferral: record.dhsStatusAtReferral || '',
+    EOIREvents: formatEoirEvents(record.eoirEvents),
   };
 }
 

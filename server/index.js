@@ -16,7 +16,7 @@ import { ScheduleError, createSchedule, scheduleInput } from './schedule.js';
 import { createGoogleTabs, createWorkbookTabs } from './sheet-tabs.js';
 import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
 import {
-  DECISIONS, WorkPermitError, createWorkPermitWorkbookStore, formatANumber, workPermitStatus, isTrackingToken, newTrackingToken, pauseClock, resumeClock,
+  DECISIONS, EOIR_CLOCK_STATUSES, EOIR_EVENT_FIELDS, WorkPermitError, createWorkPermitWorkbookStore, formatANumber, workPermitStatus, isTrackingToken, newTrackingToken, pauseClock, resumeClock,
 } from './work-permits.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -376,7 +376,35 @@ function workPermitInput(body = {}) {
   if (rawANumber && !aNumber) return { error: 'A-Number should be 8 or 9 digits, like 245-943-700.' };
   if (decision === 'Approved' && !dates.expiryDate) return { error: 'Add the card expiry date for an approved work permit.' };
   if (dates.approvedDate && dates.expiryDate && dates.expiryDate <= dates.approvedDate) return { error: 'The expiry date must be after the approval date.' };
-  return { value: { name, note, section, ...dates, pausedDays, aNumber, decision } };
+  const eoir = eoirInput(body);
+  if (eoir.error) return eoir;
+  return { value: { name, note, section, ...dates, pausedDays, aNumber, decision, ...eoir.value } };
+}
+
+// The EOIR "Asylum EAD Clock Information" fields on a work permit (all optional).
+function eoirInput(body) {
+  const value = {};
+  for (const [field, label] of [['ntaDate', 'NTA date'], ['eoirAsOf', 'EOIR "As of" date'], ['appealFiledDate', 'date appeal filed']]) {
+    const date = String(body[field] || '').trim();
+    if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`)))) return { error: `Enter a valid ${label}.` };
+    value[field] = date;
+  }
+  for (const [field, label] of [['eoirClockDays', 'EAD clock days'], ['dhsDaysAtReferral', 'DHS days at referral']]) {
+    const days = String(body[field] ?? '').trim();
+    if (days && !/^\d{1,5}$/.test(days)) return { error: `${label[0].toUpperCase()}${label.slice(1)} must be a whole number.` };
+    value[field] = days;
+  }
+  value.eoirClockStatus = EOIR_CLOCK_STATUSES.includes(body.eoirClockStatus) ? body.eoirClockStatus : '';
+  for (const [field, limit] of [['asylumType', 60], ['asylumDecision', 120], ['dhsStatusAtReferral', 200]]) {
+    value[field] = String(body[field] || '').trim();
+    if (value[field].length > limit) return { error: `That ${field === 'dhsStatusAtReferral' ? 'DHS status' : 'asylum'} entry is too long.` };
+  }
+  const events = Array.isArray(body.eoirEvents) ? body.eoirEvents.slice(0, 50) : [];
+  value.eoirEvents = events
+    // "|" and line breaks separate events in the sheet cell, so they can't appear inside one.
+    .map((event) => Object.fromEntries(EOIR_EVENT_FIELDS.map((key) => [key, String(event?.[key] ?? '').replace(/[|\r\n]+/g, ' ').trim().slice(0, key === 'decision' ? 200 : 40)])))
+    .filter((event) => Object.values(event).some(Boolean));
+  return { value };
 }
 
 async function requireWorkPermits(response) {

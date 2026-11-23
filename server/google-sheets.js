@@ -663,7 +663,7 @@ export function createGoogleSheetStore({
     const values = await readOtherSheet({
       targetSpreadsheetId: workPermitSpreadsheetId,
       tab: workPermitSheetName,
-      columns: 'A:Z',
+      columns: 'A:AZ',
       label: 'work permit',
       envName: 'GOOGLE_WORK_PERMIT_SHEET_ID',
       options: { valueRenderOption: 'FORMATTED_VALUE' },
@@ -682,7 +682,7 @@ export function createGoogleSheetStore({
     try {
       const title = await resolveTab(sheets, workPermitSpreadsheetId, workPermitSheetName, 'work permit');
       const quoted = quoteSheetName(title);
-      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: workPermitSpreadsheetId, range: `${quoted}!A:Z`, valueRenderOption: 'FORMATTED_VALUE' });
+      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: workPermitSpreadsheetId, range: `${quoted}!A:AZ`, valueRenderOption: 'FORMATTED_VALUE' });
       const values = data.values || [];
       const headers = (values[0] || []).map((header) => String(header ?? '').trim());
       const missing = WORK_PERMIT_HEADERS.filter((header) => !headers.includes(header));
@@ -719,7 +719,7 @@ export function createGoogleSheetStore({
     try {
       const title = await resolveTab(sheets, workPermitSpreadsheetId, workPermitSheetName, 'work permit');
       const quoted = quoteSheetName(title);
-      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: workPermitSpreadsheetId, range: `${quoted}!A:Z`, valueRenderOption: 'FORMATTED_VALUE' });
+      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: workPermitSpreadsheetId, range: `${quoted}!A:AZ`, valueRenderOption: 'FORMATTED_VALUE' });
       const values = data.values || [];
       const headers = (values[0] || []).map((header) => String(header ?? '').trim());
       const missing = WORK_PERMIT_HEADERS.filter((header) => !headers.includes(header));
@@ -766,7 +766,7 @@ export function createGoogleSheetStore({
       const { data: meta } = await sheets.spreadsheets.get({ spreadsheetId: workPermitSpreadsheetId, fields: 'sheets.properties(sheetId,title)' });
       const sheetId = (meta.sheets || []).find((sheet) => sheet.properties?.title === title)?.properties?.sheetId;
       if (sheetId === undefined) throw new SheetSetupError(`The work permit spreadsheet has no tab named "${title}".`);
-      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: workPermitSpreadsheetId, range: `${quoteSheetName(title)}!A:Z`, valueRenderOption: 'FORMATTED_VALUE' });
+      const { data } = await sheets.spreadsheets.values.get({ spreadsheetId: workPermitSpreadsheetId, range: `${quoteSheetName(title)}!A:AZ`, valueRenderOption: 'FORMATTED_VALUE' });
       const values = data.values || [];
       const headers = (values[0] || []).map((header) => String(header ?? '').trim());
       const idColumn = headers.indexOf('ClientID');

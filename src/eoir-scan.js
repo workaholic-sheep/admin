@@ -16,12 +16,21 @@ export function eoirDate(value) {
 
 const titleCase = (value) => value.toLowerCase().replace(/(^|[\s'-])([a-z])/g, (_all, start, letter) => start + letter.toUpperCase());
 
-// "SIWILA, DENNIS" → "Dennis Siwila"; also handles "SIWILA, DENNIS MWAPE".
-export function eoirName(value) {
+// EOIR writes "LAST, FIRST MIDDLE": the comma marks the surname, so "GARCIA LOPEZ, MARIA ELENA"
+// → { first: "Maria", middle: "Elena", last: "Garcia Lopez" }.
+export function eoirNameParts(value) {
   const cleaned = String(value || '').replace(/[^A-Za-zÀ-ÿ,' -]/g, ' ').replace(/\s+/g, ' ').trim();
-  const [last, first] = cleaned.split(',').map((part) => part.trim());
-  const name = first ? `${first} ${last}` : cleaned;
-  return name.length >= 3 ? titleCase(name) : '';
+  const [last = '', given = ''] = cleaned.split(',').map((part) => part.trim());
+  if (!given) return { first: titleCase(cleaned), middle: '', last: '' };
+  const [first, ...middle] = given.split(' ');
+  return { first: titleCase(first), middle: titleCase(middle.join(' ')), last: titleCase(last) };
+}
+
+// "SIWILA, DENNIS" → "Dennis Siwila".
+export function eoirName(value) {
+  const { first, middle, last } = eoirNameParts(value);
+  const name = [first, middle, last].filter(Boolean).join(' ');
+  return name.length >= 3 ? name : '';
 }
 
 function find(text, pattern) {
@@ -46,6 +55,7 @@ export function parseEoirText(text) {
   const fields = {
     aNumber: /^\d{8,9}$/.test(digits) ? digits.padStart(9, '0').replace(/^(\d{3})(\d{3})(\d{3})$/, '$1-$2-$3') : '',
     name: eoirName(phrase(source, 'Name', LABELS.filter((label) => label !== 'Name'))),
+    nameParts: eoirNameParts(phrase(source, 'Name', LABELS.filter((label) => label !== 'Name'))),
     ntaDate: eoirDate(find(source, `NTA\\s*Date${SEP}${DATE}`)),
     asOf: eoirDate(find(source, `As\\s*of${SEP}${DATE}`)),
     filingDate: eoirDate(find(source, `Init\\s*Asylum\\s*Rec\\S{0,3}\\s*Date${SEP}${DATE}`)),
@@ -74,24 +84,47 @@ const dayNumber = (key) => Math.round(Date.parse(`${key}T00:00:00Z`) / 86400000)
 const formatUs = (iso) => (iso ? `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${iso.slice(0, 4)}` : '');
 const EOIR_BLOCK = /\n*EOIR \(as of [^)]*\):[\s\S]*?(?=\n\n|$)/;
 
-// Applies a scan to the work permit form. Paused days are set so the app's clock matches EOIR's
-// count on the "As of" date: (As of − Init Asylum Rec'd) − EOIR elapsed days.
+// Applies a scan to the work permit form, one EOIR field per form field. Returns the form keys it
+// filled (for highlighting). Paused days are set so the app's clock matches EOIR's count on the
+// "As of" date: (As of − Init Asylum Rec'd) − EOIR elapsed days.
 export function applyEoirScan(form, scan) {
   const { fields, events } = scan;
   const next = { ...form };
-  const filled = [];
-  if (fields.name && !form.name.trim()) { next.name = fields.name; filled.push('name'); }
-  if (fields.aNumber) { next.aNumber = fields.aNumber; filled.push('A-Number'); }
-  if (fields.filingDate) { next.filingDate = fields.filingDate; filled.push("Init Asylum Rec'd Date"); }
-  const asOf = fields.asOf || '';
-  if (fields.filingDate && asOf && fields.clockDays !== null) {
-    const calendarDays = dayNumber(asOf) - dayNumber(fields.filingDate);
-    if (calendarDays >= fields.clockDays) {
-      next.pausedDays = calendarDays - fields.clockDays;
-      filled.push('days paused');
-    }
+  const keys = [];
+  const set = (key, value) => {
+    if (value === '' || value === null || value === undefined) return;
+    next[key] = value;
+    keys.push(key);
+  };
+  if (!String(form.name || '').trim()) set('name', fields.name);
+  set('aNumber', fields.aNumber);
+  set('filingDate', fields.filingDate);
+  set('ntaDate', fields.ntaDate);
+  set('eoirAsOf', fields.asOf);
+  set('eoirClockStatus', fields.clockStatus);
+  set('eoirClockDays', fields.clockDays === null ? '' : String(fields.clockDays));
+  set('asylumType', fields.asylumType);
+  set('asylumDecision', fields.asylumDecision);
+  set('appealFiledDate', fields.appealDate);
+  set('dhsDaysAtReferral', fields.dhsDays);
+  set('dhsStatusAtReferral', fields.dhsStatus);
+  if (events.length) set('eoirEvents', events.map((event) => ({ ...event, elapsed: String(event.elapsed), cumulative: String(event.cumulative) })));
+  if (fields.filingDate && fields.asOf && fields.clockDays !== null) {
+    const calendarDays = dayNumber(fields.asOf) - dayNumber(fields.filingDate);
+    if (calendarDays >= fields.clockDays) set('pausedDays', calendarDays - fields.clockDays);
   }
-  const summary = [
+  // Earlier scans wrote an "EOIR (as of …)" summary into the note; those details now have their own fields.
+  const note = String(form.note || '');
+  if (EOIR_BLOCK.test(note)) next.note = note.replace(EOIR_BLOCK, '').trim();
+  return { next, keys, clockStopped: fields.clockStatus === 'Stopped' };
+}
+
+// Plain-text lines describing a scan, for forms without EOIR fields (client intake notes).
+export function eoirSummaryLines(scan) {
+  const { fields, events } = scan;
+  return [
+    fields.aNumber && `A-Number: ${fields.aNumber}`,
+    fields.filingDate && `Init Asylum Rec'd Date: ${formatUs(fields.filingDate)}`,
     fields.clockDays !== null && `EAD clock ${fields.clockStatus === 'Stopped' ? 'stopped' : 'running'}: ${fields.clockDays} days`,
     fields.ntaDate && `NTA ${formatUs(fields.ntaDate)}`,
     fields.asylumType && `Asylum type: ${fields.asylumType}`,
@@ -101,11 +134,12 @@ export function applyEoirScan(form, scan) {
     fields.dhsStatus && `DHS status at referral: ${fields.dhsStatus}`,
     ...events.map((item) => `${item.event} ${formatUs(item.date)} ${item.city}${item.decision ? ` – ${item.decision}` : ''} (${item.action}, ${item.elapsed}/${item.cumulative} days)`),
   ].filter(Boolean);
-  if (summary.length) {
-    // Replaces the previous EOIR summary instead of piling up copies on each re-scan.
-    const kept = String(form.note || '').replace(EOIR_BLOCK, '').trim();
-    next.note = `${kept ? `${kept}\n\n` : ''}EOIR (as of ${formatUs(asOf) || 'scan'}):\n${summary.join('\n')}`.slice(0, 2000);
-    filled.push('EOIR summary in the note');
-  }
-  return { next, filled, clockStopped: fields.clockStatus === 'Stopped' };
+}
+
+// Replaces any earlier "EOIR (as of …)" block in a note with a fresh one.
+export function withEoirSummary(note, scan) {
+  const lines = eoirSummaryLines(scan);
+  const kept = String(note || '').replace(EOIR_BLOCK, '').trim();
+  if (!lines.length) return kept;
+  return `${kept ? `${kept}\n\n` : ''}EOIR (as of ${formatUs(scan.fields.asOf) || 'scan'}):\n${lines.join('\n')}`.slice(0, 2000);
 }

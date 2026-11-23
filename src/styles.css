@@ -1022,3 +1022,30 @@ body { font-size: var(--type-body); }
 [data-theme="dark"] .scan-notice { background: #1b2a38; border-color: #2f4c66; color: #b9d3ea; }
 [data-theme="dark"] .scan-notice strong { color: #93c1ea; }
 [data-theme="dark"] .scan-warning { background: #3a2f1e; color: #e2b56e; }
+
+/* Work permit form laid out like the EOIR clock screen */
+.eoir-clock-inputs { display: grid; grid-template-columns: 120px 96px auto; align-items: center; gap: 8px; }
+.eoir-clock-inputs select { padding-right: 10px; appearance: auto; }
+.eoir-clock-unit { color: #7b877f; font-size: var(--type-small); font-weight: 500; }
+.eoir-events { display: grid; gap: 8px; padding: 4px; border: 1px solid transparent; border-radius: 6px; }
+.eoir-events.is-scanned { border-color: #9dbca3; background: #f1f7f1; }
+.eoir-events-table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.eoir-events-table th { padding: 8px 6px; background: #dfe6ee; color: #3b4652; font-size: var(--type-caption); font-weight: 700; text-align: left; white-space: nowrap; }
+.eoir-events-table td { padding: 4px; border-bottom: 1px solid #e9eef3; }
+.eoir-events-table input { width: 100%; min-width: 0; height: 32px; padding: 0 7px; border: 1px solid #dfe6df; border-radius: 4px; background: #fff; color: #35483c; font-size: var(--type-small); }
+.eoir-events-table td:nth-child(1) { width: 11%; }
+.eoir-events-table td:nth-child(2) { width: 15%; }
+.eoir-events-table td:nth-child(3) { width: 8%; }
+.eoir-events-table td:nth-child(5) { width: 10%; }
+.eoir-events-table td:nth-child(6), .eoir-events-table td:nth-child(7) { width: 9%; }
+.eoir-events-table td:last-child { width: 40px; }
+.eoir-events-table .icon-button { width: 30px; height: 30px; }
+.eoir-events-empty { padding: 14px 8px !important; color: #8a968e; font-size: var(--type-small); text-align: center; }
+.eoir-events > .text-button { justify-self: start; }
+.eoir-meta { color: #2f6496 !important; }
+[data-theme="dark"] .eoir-clock-unit, [data-theme="dark"] .eoir-events-empty { color: var(--d-text-3); }
+[data-theme="dark"] .eoir-events.is-scanned { background: #1b2b22; border-color: #3d6550; }
+[data-theme="dark"] .eoir-events-table th { background: #1f2a33; color: var(--d-text-2); }
+[data-theme="dark"] .eoir-events-table td { border-color: var(--d-line-soft); }
+[data-theme="dark"] .eoir-events-table input { background: var(--d-bg); border-color: #34413b; color: var(--d-text); }
+[data-theme="dark"] .eoir-meta { color: #93c1ea !important; }

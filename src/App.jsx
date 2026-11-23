@@ -924,7 +924,7 @@ function clientSuggestions(clients, text) {
     .slice(0, 8);
 }
 
-function NameSuggest({ value, clients, onChange, onPick, required = true, autoFocus = true }) {
+function NameSuggest({ value, clients, onChange, onPick, required = true, autoFocus = true, className }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const listId = useId();
@@ -947,7 +947,7 @@ function NameSuggest({ value, clients, onChange, onPick, required = true, autoFo
   return (
     <span className="name-suggest">
       <input
-        name="name" value={value} maxLength={200} placeholder="Start typing a client name" required={required} autoFocus={autoFocus} autoComplete="off"
+        className={className} name="name" value={value} maxLength={200} placeholder="Start typing a client name" required={required} autoFocus={autoFocus} autoComplete="off"
         role="combobox" aria-expanded={showList} aria-controls={listId} aria-autocomplete="list"
         aria-activedescendant={showList ? `${listId}-${active}` : undefined}
         onChange={(event) => { onChange(event.target.value); setOpen(true); setActive(0); }}
@@ -1118,7 +1118,17 @@ function PermitStatus({ status }) {
   );
 }
 
-const emptyPermitForm = { name: '', note: '', section: 'Regular', filingDate: '', pausedDays: 0, aNumber: '', decision: 'Pending', approvedDate: '', expiryDate: '' };
+const emptyPermitForm = {
+  name: '', note: '', section: 'Regular', filingDate: '', pausedDays: 0, aNumber: '', decision: 'Pending', approvedDate: '', expiryDate: '',
+  // Same fields as the EOIR "Asylum EAD Clock Information" screen.
+  ntaDate: '', eoirAsOf: '', eoirClockStatus: '', eoirClockDays: '', asylumType: '', asylumDecision: '', appealFiledDate: '', dhsDaysAtReferral: '', dhsStatusAtReferral: '', eoirEvents: [],
+};
+const EOIR_FIELD_LABELS = {
+  name: 'Name', aNumber: 'A-Number', filingDate: "Init Asylum Rec'd Date", ntaDate: 'NTA Date', eoirAsOf: 'As of', eoirClockStatus: 'EAD clock',
+  eoirClockDays: 'clock days', asylumType: 'Asylum Type', asylumDecision: 'Asylum Decision', appealFiledDate: 'Date Appeal Filed',
+  dhsDaysAtReferral: 'DHS Days At Referral', dhsStatusAtReferral: 'DHS Status At Referral', eoirEvents: 'events', pausedDays: 'days paused',
+};
+const emptyEoirEvent = { event: '', date: '', city: '', decision: '', action: '', elapsed: '', cumulative: '' };
 
 function WorkPermitList({ clients = [], onToast }) {
   const [records, setRecords] = useState([]);
@@ -1134,6 +1144,7 @@ function WorkPermitList({ clients = [], onToast }) {
   const [busyId, setBusyId] = useState('');
   const [shared, setShared] = useState(null);
   const [scanNotice, setScanNotice] = useState(null);
+  const [scannedKeys, setScannedKeys] = useState(() => new Set());
   const formRef = useRef(null);
 
   const replace = (record) => setRecords((current) => current.map((item) => item.id === record.id ? record : item));
@@ -1149,7 +1160,7 @@ function WorkPermitList({ clients = [], onToast }) {
     setEditing('new');
     setForm(emptyPermitForm);
     setFormError('');
-    setScanNotice(null);
+    setScanNotice(null); setScannedKeys(new Set());
   }
 
   const formFor = (record) => ({
@@ -1162,7 +1173,7 @@ function WorkPermitList({ clients = [], onToast }) {
     setEditing(record.id);
     setForm(formFor(record));
     setFormError('');
-    setScanNotice(null);
+    setScanNotice(null); setScannedKeys(new Set());
   }
 
   // An EOIR screenshot updates the record with the same A-Number (or, failing that, the same name);
@@ -1173,18 +1184,39 @@ function WorkPermitList({ clients = [], onToast }) {
     const match = (scan.fields.aNumber && records.find((record) => digits(record.aNumber) && digits(record.aNumber) === digits(scan.fields.aNumber)))
       || (scan.fields.name && records.find((record) => nameKey(record.name) === nameKey(scan.fields.name)))
       || null;
-    const { next, filled, clockStopped } = applyEoirScan(match ? formFor(match) : emptyPermitForm, scan);
+    const { next, keys, clockStopped } = applyEoirScan(match ? formFor(match) : emptyPermitForm, scan);
     setEditing(match ? match.id : 'new');
     setForm(next);
     setFormError('');
-    setScanNotice({ match, filled, clockStopped: clockStopped && match?.clockStatus !== 'Paused', clockDays: scan.fields.clockDays, asOf: scan.fields.asOf });
+    setScannedKeys(new Set(keys));
+    setScanNotice({ match, filled: keys.map((key) => EOIR_FIELD_LABELS[key] || key), clockStopped: clockStopped && match?.clockStatus !== 'Paused', clockDays: scan.fields.clockDays, asOf: scan.fields.asOf });
     window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     return match ? `Matched ${match.name} (${match.id}). Check the form below and press Save changes.` : 'New client. Check the form below and press Add client.';
   }
 
+  // Editing a highlighted (scanned) box removes its highlight.
+  const unmark = (key) => setScannedKeys((current) => {
+    if (!current.has(key)) return current;
+    const next = new Set(current);
+    next.delete(key);
+    return next;
+  });
+  const scannedClass = (key) => (scannedKeys.has(key) ? 'is-scanned' : undefined);
+
   function update(event) {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
+    unmark(name);
+  }
+
+  function updateEvent(index, key, value) {
+    setForm((current) => ({ ...current, eoirEvents: current.eoirEvents.map((item, position) => (position === index ? { ...item, [key]: value } : item)) }));
+    unmark('eoirEvents');
+  }
+
+  function changeEvents(change) {
+    setForm((current) => ({ ...current, eoirEvents: change(current.eoirEvents) }));
+    unmark('eoirEvents');
   }
 
   async function save(event) {
@@ -1200,7 +1232,7 @@ function WorkPermitList({ clients = [], onToast }) {
       if (isNew) setRecords((current) => [...current, result.workPermit]);
       else replace(result.workPermit);
       setEditing(null);
-      setScanNotice(null);
+      setScanNotice(null); setScannedKeys(new Set());
       onToast(`${result.workPermit.name} ${isNew ? `added as ${result.workPermit.id}` : 'updated'}`);
     } catch (saveError) {
       setFormError(saveError.message);
@@ -1316,18 +1348,58 @@ function WorkPermitList({ clients = [], onToast }) {
           <span>Filled: {scanNotice.filled.join(', ')}.{scanNotice.clockDays !== null && scanNotice.asOf ? ` Days paused is set so the clock shows ${scanNotice.clockDays} days on ${formatDate(scanNotice.asOf)}, matching EOIR.` : ''} Check everything, then save.</span>
           {scanNotice.clockStopped && <span className="scan-warning">EOIR shows the clock <b>stopped</b>. After saving, press <b>Pause</b> on this record so the app stops counting too.</span>}
         </div>}
+        {/* Laid out like the EOIR "Asylum EAD Clock Information" screen: left and right columns as on EOIR. */}
         <div className="form-grid">
-          <label className="field">Client name<NameSuggest value={form.name} clients={clients} onChange={(name) => setForm((current) => ({ ...current, name }))} onPick={(client) => setForm((current) => ({ ...current, name: client.name }))} />
+          <div className="form-section-title field-wide"><span>01</span><h3>Removal</h3></div>
+          <label className="field">A-Number<input className={scannedClass('aNumber')} name="aNumber" value={form.aNumber} onChange={update} maxLength={14} inputMode="numeric" placeholder="e.g. 245-943-700" /><span className="field-hint">Staff only — never shown on the client's link.</span></label>
+          <label className="field">NTA Date<input className={scannedClass('ntaDate')} type="date" name="ntaDate" value={form.ntaDate} onChange={update} onClick={openPicker} /></label>
+          <label className="field">Name<NameSuggest className={scannedClass('name')} value={form.name} clients={clients} onChange={(name) => { setForm((current) => ({ ...current, name })); unmark('name'); }} onPick={(client) => { setForm((current) => ({ ...current, name: client.name })); unmark('name'); }} />
             {duplicate && <span className="field-hint">Already in work permits as {duplicate.id}.</span>}</label>
+          <label className="field">As of<input className={scannedClass('eoirAsOf')} type="date" name="eoirAsOf" value={form.eoirAsOf} onChange={update} onClick={openPicker} /><span className="field-hint">The date EOIR's numbers were shown.</span></label>
+          <div className="field eoir-clock-field">
+            <span>EAD Clock (EOIR)</span>
+            <div className="eoir-clock-inputs">
+              <select className={scannedClass('eoirClockStatus')} name="eoirClockStatus" value={form.eoirClockStatus} onChange={update} aria-label="EOIR clock running or stopped"><option value="">Not set</option><option>Running</option><option>Stopped</option></select>
+              <input className={scannedClass('eoirClockDays')} type="number" name="eoirClockDays" min="0" max="99999" value={form.eoirClockDays} onChange={update} aria-label="EOIR clock days elapsed" placeholder="Days" />
+              <span className="eoir-clock-unit">days elapsed</span>
+            </div>
+          </div>
+          <label className="field">Asylum Type<input className={scannedClass('asylumType')} name="asylumType" value={form.asylumType} onChange={update} maxLength={60} list="asylum-types" placeholder="Affirmative or Defensive" /><datalist id="asylum-types"><option value="Affirmative" /><option value="Defensive" /></datalist></label>
+          <label className="field">Init Asylum Rec'd Date — starts the EAD clock<input className={scannedClass('filingDate')} type="date" name="filingDate" value={form.filingDate} onChange={update} onClick={openPicker} /></label>
+          <label className="field">Asylum Decision<input className={scannedClass('asylumDecision')} name="asylumDecision" value={form.asylumDecision} onChange={update} maxLength={120} /></label>
+          <label className="field">Date Appeal Filed<input className={scannedClass('appealFiledDate')} type="date" name="appealFiledDate" value={form.appealFiledDate} onChange={update} onClick={openPicker} /></label>
+          <label className="field">DHS Days At Referral<input className={scannedClass('dhsDaysAtReferral')} type="number" name="dhsDaysAtReferral" min="0" max="99999" value={form.dhsDaysAtReferral} onChange={update} placeholder="Days elapsed" /></label>
+          <label className="field field-wide">DHS Status At Referral<input className={scannedClass('dhsStatusAtReferral')} name="dhsStatusAtReferral" value={form.dhsStatusAtReferral} onChange={update} maxLength={200} /></label>
+
+          <div className="form-section-title field-wide"><span>02</span><h3>Event Dates &amp; Decisions/Adjournments</h3></div>
+          <div className={`field-wide eoir-events ${scannedKeys.has('eoirEvents') ? 'is-scanned' : ''}`}>
+            <div className="table-scroll"><table className="eoir-events-table">
+              <thead><tr><th>Events</th><th>Date</th><th>Base City</th><th>Decision/Adjournment</th><th>Clock Action</th><th>Elapsed Days</th><th>Cumulative</th><th><span className="sr-only">Remove</span></th></tr></thead>
+              <tbody>
+                {form.eoirEvents.map((item, index) => <tr key={index}>
+                  <td><input value={item.event} onChange={(event) => updateEvent(index, 'event', event.target.value)} maxLength={40} aria-label={`Event ${index + 1}`} placeholder="Hearing" /></td>
+                  <td><input type="date" value={item.date} onChange={(event) => updateEvent(index, 'date', event.target.value)} onClick={openPicker} aria-label={`Event ${index + 1} date`} /></td>
+                  <td><input value={item.city} onChange={(event) => updateEvent(index, 'city', event.target.value)} maxLength={40} aria-label={`Event ${index + 1} base city`} placeholder="CHI" /></td>
+                  <td><input value={item.decision} onChange={(event) => updateEvent(index, 'decision', event.target.value)} maxLength={200} aria-label={`Event ${index + 1} decision or adjournment`} /></td>
+                  <td><input value={item.action} onChange={(event) => updateEvent(index, 'action', event.target.value)} maxLength={40} list="clock-actions" aria-label={`Event ${index + 1} clock action`} placeholder="Run" /></td>
+                  <td><input type="number" min="0" value={item.elapsed} onChange={(event) => updateEvent(index, 'elapsed', event.target.value)} aria-label={`Event ${index + 1} elapsed days`} /></td>
+                  <td><input type="number" min="0" value={item.cumulative} onChange={(event) => updateEvent(index, 'cumulative', event.target.value)} aria-label={`Event ${index + 1} cumulative days`} /></td>
+                  <td><button className="icon-button button-remove" type="button" onClick={() => changeEvents((events) => events.filter((_item, position) => position !== index))} aria-label={`Remove event ${index + 1}`} title="Remove"><X size={14} /></button></td>
+                </tr>)}
+                {!form.eoirEvents.length && <tr><td colSpan="8" className="eoir-events-empty">No events yet. Paste an EOIR screenshot, or add them by hand.</td></tr>}
+              </tbody>
+            </table></div>
+            <datalist id="clock-actions"><option value="Run" /><option value="Stop" /><option value="Start" /></datalist>
+            <button className="text-button" type="button" onClick={() => changeEvents((events) => [...events, { ...emptyEoirEvent }])}><Plus size={14} />Add event</button>
+          </div>
+
+          <div className="form-section-title field-wide"><span>03</span><h3>Work permit tracking</h3></div>
+          <label className="field">Days paused so far<input className={scannedClass('pausedDays')} type="number" name="pausedDays" min="0" max="3650" step="1" value={form.pausedDays} onChange={update} /><span className="field-hint">Applicant-caused delays don't count toward 150/180 days. Set automatically from an EOIR screenshot.</span></label>
           <label className="field">Section<select name="section" value={form.section} onChange={update}><option>Regular</option><option>Pending</option></select><ChevronDown size={15} /></label>
-          <div className="form-section-title field-wide"><span>01</span><h3>Asylum clock</h3></div>
-          <label className="field">Init Asylum Rec'd Date (I-589) — starts the EAD clock<input type="date" name="filingDate" value={form.filingDate} onChange={update} /></label>
-          <label className="field">Days paused so far<input type="number" name="pausedDays" min="0" max="3650" step="1" value={form.pausedDays} onChange={update} /><span className="field-hint">Applicant-caused delays don't count toward 150/180 days.</span></label>
-          <label className="field">A-Number<input name="aNumber" value={form.aNumber} onChange={update} maxLength={14} inputMode="numeric" placeholder="e.g. 245-943-700" /><span className="field-hint">Staff only — never shown on the client's link.</span></label>
           <label className="field field-wide">Internal note (never shown to the client)<textarea name="note" value={form.note} onChange={update} rows={3} maxLength={2000} /></label>
         </div>
         {formError && <div className="form-error" role="alert">{formError}</div>}
-        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => { setEditing(null); setScanNotice(null); }}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : editing === 'new' ? 'Add client' : 'Save changes'}</button></div>
+        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => { setEditing(null); setScanNotice(null); setScannedKeys(new Set()); }}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : editing === 'new' ? 'Add client' : 'Save changes'}</button></div>
       </form>}
       <section className="surface roster-surface">
         <div className="roster-toolbar">
@@ -1355,6 +1427,7 @@ function WorkPermitList({ clients = [], onToast }) {
                 <div className="permit-client">
                   <div className="permit-title"><strong>{record.name}</strong><span className={`status ${record.section === 'Pending' ? 'status-caution' : 'status-neutral'}`}><i />{record.section || 'Not set'}</span></div>
                   <small className="permit-meta">{record.id}{record.aNumber && <> · A-Number {record.aNumber}</>}</small>
+                  {(record.eoirClockDays || record.asylumType) && <small className="permit-meta eoir-meta">EOIR{record.eoirClockDays && <>: clock {record.eoirClockStatus === 'Stopped' ? 'stopped' : 'running'}, {record.eoirClockDays} days</>}{record.eoirAsOf && <> as of {formatDate(record.eoirAsOf)}</>}{record.asylumType && <> · {record.asylumType}</>}{record.asylumDecision && <> · {record.asylumDecision}</>}</small>}
                   {record.note && <p className="permit-note">{record.note}</p>}
                 </div>
                 <EadClock status={record.status} />
