@@ -42,6 +42,9 @@ const sourceName = useGoogleSheets ? 'Google Sheets' : 'Excel';
 const store = useGoogleSheets
   ? createGoogleSheetStore({
     spreadsheetId: spreadsheetIdFrom(process.env.GOOGLE_SHEET_ID),
+    // MasterData now lives in Clients_Additional_Info. GOOGLE_SHEET_ID stays the home of the
+    // payment reminder and credential tabs when they have no sheet ID of their own.
+    masterSpreadsheetId: spreadsheetIdFrom(process.env.GOOGLE_MASTER_SHEET_ID || process.env.GOOGLE_CASES_SHEET_ID),
     sheetName: process.env.GOOGLE_SHEET_NAME || 'MasterData',
     courtSpreadsheetId: spreadsheetIdFrom(process.env.GOOGLE_COURT_SHEET_ID),
     courtSheetName: process.env.GOOGLE_COURT_SHEET_NAME || 'COURT DATE LIST',

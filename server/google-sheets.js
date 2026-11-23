@@ -108,6 +108,8 @@ function googleTime(value) {
 
 export function createGoogleSheetStore({
   spreadsheetId,
+  // Where the MasterData tab lives; defaults to spreadsheetId.
+  masterSpreadsheetId = '',
   sheetName = 'MasterData',
   courtSpreadsheetId = '',
   courtSheetName = 'COURT DATE LIST',
@@ -120,6 +122,7 @@ export function createGoogleSheetStore({
   serviceAccountEmail,
   privateKey,
 }, api = google) {
+  const clientSpreadsheetId = masterSpreadsheetId || spreadsheetId;
   let activeSheetName = '';
   let queuedWrite = Promise.resolve();
   const resolvedTitles = new Map();
@@ -169,7 +172,7 @@ export function createGoogleSheetStore({
     const sheets = getSheetsClient();
     const readSheet = async (targetSheet) => {
       const response = await sheets.spreadsheets.values.get({
-        spreadsheetId,
+        spreadsheetId: clientSpreadsheetId,
         range: `${quoteSheetName(targetSheet)}!${CLIENT_COLUMNS}`,
         valueRenderOption: 'UNFORMATTED_VALUE',
         dateTimeRenderOption: 'SERIAL_NUMBER',
@@ -329,7 +332,7 @@ export function createGoogleSheetStore({
     put('NOTES', input.notes || '');
 
     await sheets.spreadsheets.values.append({
-      spreadsheetId,
+      spreadsheetId: clientSpreadsheetId,
       range,
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
@@ -376,7 +379,7 @@ export function createGoogleSheetStore({
     const rowNumber = rowIndex + 2;
     const cell = `${columnLetters(nextContactIndex + 1)}${rowNumber}`;
     await sheets.spreadsheets.values.update({
-      spreadsheetId,
+      spreadsheetId: clientSpreadsheetId,
       range: `${quotedSheet}!${cell}`,
       valueInputOption: 'RAW',
       requestBody: { values: [['done']] },
@@ -395,13 +398,13 @@ export function createGoogleSheetStore({
     if (rowIndex < 0) throw new Error('Client not found.');
     const client = mappedClient(headers, rows[rowIndex]);
     const sheetRow = rowIndex + 2;
-    const { data } = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties(sheetId,title)' });
+    const { data } = await sheets.spreadsheets.get({ spreadsheetId: clientSpreadsheetId, fields: 'sheets.properties(sheetId,title)' });
     const sheetId = (data.sheets || []).find((sheet) => sheet.properties?.title === sheetName)?.properties?.sheetId;
     if (sheetId === undefined) throw new SheetSetupError(`Could not find the ${sheetName} tab.`);
-    const check = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quotedSheet}!${columnLetters(idIndex + 1)}${sheetRow}`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    const check = await sheets.spreadsheets.values.get({ spreadsheetId: clientSpreadsheetId, range: `${quotedSheet}!${columnLetters(idIndex + 1)}${sheetRow}`, valueRenderOption: 'UNFORMATTED_VALUE' });
     if (String(check.data.values?.[0]?.[0] ?? '') !== clientId) throw new Error('MasterData changed while deleting. Refresh and try again.');
     await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
+      spreadsheetId: clientSpreadsheetId,
       requestBody: { requests: [{ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: sheetRow - 1, endIndex: sheetRow } } }] },
     });
     return client;
@@ -458,7 +461,7 @@ export function createGoogleSheetStore({
     if (parseDateFormula(input.dateOfBirth)) put('Age', ageFormula(indexes, rowIndex + 2), true);
 
     await sheets.spreadsheets.values.batchUpdate({
-      spreadsheetId,
+      spreadsheetId: clientSpreadsheetId,
       valueInputOption: 'USER_ENTERED',
       requestBody: { data: updates },
     });
