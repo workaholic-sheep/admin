@@ -13,6 +13,7 @@ import { SCHEDULE_ADDED_BY, TEAM_MEMBERS } from '../src/team.js';
 import { nameParts } from '../src/names.js';
 import { CASE_STATUSES } from '../src/case-status.js';
 import { ScheduleError, createSchedule, scheduleInput } from './schedule.js';
+import { IssueError, createIssues, issueInput, solveInput } from './issues.js';
 import { CourtDateError, courtDateInput, createCourtDates, listNewCourtDates } from './court-dates.js';
 import { createGoogleTabs, createWorkbookTabs } from './sheet-tabs.js';
 import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
@@ -74,6 +75,7 @@ try {
 }
 const cases = createCaseAssignments(caseTabs, caseSetupMessage);
 const schedule = createSchedule(caseTabs, caseSetupMessage);
+const issues = createIssues(caseTabs, caseSetupMessage);
 const newCourtDates = createCourtDates(caseTabs, 'Court dates are saved in the Court_Dates tab of Clients_Additional_Info, which isn\'t connected yet (GOOGLE_CASES_SHEET_ID).', centralTimestamp);
 const SYNC_EVERY_MS = 60 * 1000;
 let lastSync = 0;
@@ -287,6 +289,37 @@ app.put('/api/schedule/:id', scheduleRoute(async (request, response) => {
 
 app.delete('/api/schedule/:id', scheduleRoute(async (request, response) => {
   response.json({ entry: await schedule.remove(request.params.id) });
+}));
+
+// Team issue log (Issues tab). Anyone can report one; marking it solved records who and when.
+const issueRoute = (handler) => async (request, response, next) => {
+  try {
+    await handler(request, response);
+  } catch (error) {
+    if (error instanceof IssueError) return response.status(error.status).json({ error: error.message });
+    if (error instanceof CaseSetupError) return response.status(503).json({ error: error.message });
+    return next(error);
+  }
+};
+
+app.get('/api/issues', issueRoute(async (_request, response) => {
+  response.json({ issues: await issues.list() });
+}));
+
+app.post('/api/issues', issueRoute(async (request, response) => {
+  response.status(201).json({ issue: await issues.add(issueInput(request.body)) });
+}));
+
+app.post('/api/issues/:id/solve', issueRoute(async (request, response) => {
+  response.json({ issue: await issues.solve(request.params.id, solveInput(request.body)) });
+}));
+
+app.post('/api/issues/:id/reopen', issueRoute(async (request, response) => {
+  response.json({ issue: await issues.reopen(request.params.id) });
+}));
+
+app.delete('/api/issues/:id', issueRoute(async (request, response) => {
+  response.json({ issue: await issues.remove(request.params.id) });
 }));
 
 // Case notes: an add-only log in the Case_Notes tab. The server stamps each note in Central Time.

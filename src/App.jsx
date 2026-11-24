@@ -35,6 +35,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   ScanText,
   Search,
   SlidersHorizontal,
@@ -57,6 +58,7 @@ import { SCHEDULE_ADDED_BY, TEAM_MEMBERS } from './team.js';
 import { splitName } from './names.js';
 import { CASE_STATUSES, caseStatusTone } from './case-status.js';
 import { SCHEDULE_MODES, SCHEDULE_STATUSES, timeTo24h } from './schedule.js';
+import { centralToDate, formatDuration, issueDuration } from './issues.js';
 
 const frequencies = [
   'Once a Month',
@@ -76,10 +78,10 @@ const EXTRA_TABS = [
   { page: 'credentials', label: 'Credentials', icon: KeyRound, built: true },
 ];
 
-// Pages under the Issues group in the sidebar. Both show "Coming soon" for now.
+// Pages under the Issues group in the sidebar; each lists one category from the Issues tab.
 const ISSUE_TABS = [
-  { page: 'issues-tech', label: 'Tech Issues', icon: Wrench },
-  { page: 'issues-other', label: 'Other Issues', icon: AlertCircle },
+  { page: 'issues-tech', label: 'Tech Issues', category: 'Tech' },
+  { page: 'issues-other', label: 'Other Issues', category: 'Other' },
 ];
 
 function useTheme() {
@@ -1829,6 +1831,220 @@ function SchedulePage({ clients, onSelectClient, onToast }) {
   );
 }
 
+// Team issue log for one category (Tech or Other), saved in the Issues tab. Times are Central.
+function IssuesPage({ category, onToast }) {
+  const [issues, setIssues] = useState([]);
+  const [loadState, setLoadState] = useState('loading');
+  const [loadError, setLoadError] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ title: '', details: '', reportedBy: '' });
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [rowError, setRowError] = useState('');
+  const [solving, setSolving] = useState(null);
+  const [busyId, setBusyId] = useState('');
+  const [show, setShow] = useState('open');
+  const [search, setSearch] = useState('');
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/issues')
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load issues.');
+        if (active) { setIssues(result.issues || []); setLoadState('ready'); }
+      })
+      .catch((error) => { if (active) { setLoadError(error.message); setLoadState('error'); } });
+    return () => { active = false; };
+  }, []);
+  // Keeps the "Open 3h 20m" times current.
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const savedAuthor = () => { try { return localStorage.getItem('note-author') || ''; } catch { return ''; } };
+  const rememberAuthor = (name) => { try { localStorage.setItem('note-author', name); } catch { /* remembered for this visit only */ } };
+  const replace = (issue) => setIssues((current) => current.map((item) => item.id === issue.id ? issue : item));
+  const updateForm = (event) => setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
+
+  function startAdd() {
+    const author = savedAuthor();
+    setForm({ title: '', details: '', reportedBy: SCHEDULE_ADDED_BY.includes(author) ? author : '' });
+    setFormError('');
+    setAdding(true);
+  }
+
+  async function post(url, body, fallback) {
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || fallback);
+    return result.issue;
+  }
+
+  async function add(event) {
+    event.preventDefault();
+    setSaving(true);
+    setFormError('');
+    try {
+      const issue = await post('/api/issues', { ...form, category }, 'Could not save this issue.');
+      rememberAuthor(form.reportedBy);
+      setIssues((current) => [...current, issue]);
+      setShow((current) => current === 'solved' ? 'open' : current);
+      onToast(`Issue logged: ${issue.title}`);
+      setAdding(false);
+    } catch (error) {
+      setFormError(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reopen(issue) {
+    if (!window.confirm(`Reopen "${issue.title}"? Its solved time and resolution are cleared, and the time open counts again from when it was first reported.`)) return;
+    setRowError('');
+    setBusyId(issue.id);
+    try {
+      replace(await post(`/api/issues/${encodeURIComponent(issue.id)}/reopen`, {}, 'Could not reopen this issue.'));
+      onToast(`Reopened: ${issue.title}`);
+    } catch (error) {
+      setRowError(error.message);
+    } finally {
+      setBusyId('');
+    }
+  }
+
+  async function remove(issue) {
+    if (!window.confirm(`Delete "${issue.title}"? This removes it from the Issues tab.`)) return;
+    setRowError('');
+    setBusyId(issue.id);
+    try {
+      const response = await fetch(`/api/issues/${encodeURIComponent(issue.id)}`, { method: 'DELETE' });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not delete this issue.');
+      setIssues((current) => current.filter((item) => item.id !== issue.id));
+      onToast('Issue deleted');
+    } catch (error) {
+      setRowError(error.message);
+    } finally {
+      setBusyId('');
+    }
+  }
+
+  const mine = issues.filter((issue) => issue.category === category);
+  const openCount = mine.filter((issue) => issue.status === 'Open').length;
+  const solved = mine.filter((issue) => issue.status === 'Solved');
+  const solvedDurations = solved.map((issue) => issueDuration(issue)).filter(Number.isFinite);
+  const averageFix = solvedDurations.length ? formatDuration(solvedDurations.reduce((sum, value) => sum + value, 0) / solvedDurations.length) : '';
+  const query = search.trim().toLowerCase();
+  const timeOf = (value) => centralToDate(value)?.getTime() || 0;
+  const visible = mine
+    .filter((issue) => show === 'all' || (show === 'open' ? issue.status === 'Open' : issue.status === 'Solved'))
+    .filter((issue) => !query || [issue.title, issue.details, issue.reportedBy, issue.solvedBy, issue.resolution, issue.id].some((value) => String(value || '').toLowerCase().includes(query)))
+    // Open first with the longest-waiting on top; then solved, most recently solved first.
+    .sort((left, right) => (left.status !== right.status
+      ? (left.status === 'Open' ? -1 : 1)
+      : left.status === 'Open' ? timeOf(left.reportedAt) - timeOf(right.reportedAt) : timeOf(right.solvedAt) - timeOf(left.solvedAt)));
+  const label = category === 'Tech' ? 'tech issue' : 'issue';
+  const empty = loadState === 'loading' ? ['Loading issues…', '']
+    : loadState === 'error' ? ['Could not load issues', loadError]
+      : !mine.length ? [`No ${label}s logged yet`, `Use “Report ${label}” when something needs fixing.`]
+        : show === 'open' && !query ? ['Nothing open', 'Every issue here has been solved.'] : ['Nothing to show', 'Try a different filter or search.'];
+
+  return (
+    <>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">ISSUES · {openCount} OPEN{averageFix && ` · AVERAGE FIX ${averageFix.toUpperCase()}`} · CENTRAL TIME</span><h1>{category === 'Tech' ? 'Tech Issues' : 'Other Issues'}</h1><p className="page-subtitle">{category === 'Tech' ? 'Computer, software, login and equipment problems.' : 'Anything else the team needs sorted out.'} Each issue shows how long it has been open.</p></div><button className="button button-primary" onClick={startAdd} disabled={loadState !== 'ready'}><Plus size={16} />Report {label}</button></div>
+      {adding && <form className="surface reminder-form" onSubmit={add}>
+        <div className="form-grid">
+          <label className="field field-wide">What’s the issue?<b>*</b><input name="title" value={form.title} onChange={updateForm} maxLength={200} required autoFocus placeholder={category === 'Tech' ? 'e.g. Front office printer won’t scan' : 'e.g. Running low on client folders'} /></label>
+          <label className="field field-wide">Details (optional)<textarea name="details" value={form.details} onChange={updateForm} maxLength={2000} rows={3} placeholder="What happened, any error message, who it affects" /></label>
+          <label className="field">Reported by<select name="reportedBy" value={form.reportedBy} onChange={updateForm} required><option value="" disabled>Choose…</option>{SCHEDULE_ADDED_BY.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
+        </div>
+        {formError && <div className="form-error" role="alert">{formError}</div>}
+        <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : `Log ${label}`}</button></div>
+      </form>}
+      {rowError && <div className="load-error" role="alert"><span>{rowError}</span><button onClick={() => setRowError('')}>Dismiss <X size={14} /></button></div>}
+      <section className="surface roster-surface">
+        <div className="roster-toolbar">
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search issues, people or how they were solved" aria-label="Search issues" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+          <FilterMenu label="Show" value={show} onChange={setShow} icon={SlidersHorizontal} options={[{ value: 'open', label: `Open (${openCount})` }, { value: 'solved', label: `Solved (${solved.length})` }, { value: 'all', label: 'All' }]} />
+        </div>
+        <div className="table-scroll"><table className="client-table issue-table"><thead><tr><th>Issue</th><th>Reported</th><th>Status</th><th>How long</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>
+          {visible.map((issue) => {
+            const isOpen = issue.status === 'Open';
+            const duration = formatDuration(issueDuration(issue, now)) || issue.timeOpen || '—';
+            return <tr key={issue.id} className={`row-static ${isOpen ? '' : 'is-solved'}`}>
+              <td className="issue-main"><strong>{issue.title}</strong>{issue.details && <small className="issue-details">{issue.details}</small>}{!isOpen && issue.resolution && <small className="issue-resolution"><Check size={12} />{issue.resolution}</small>}</td>
+              <td><span className="issue-who">{issue.reportedBy || '—'}</span><small>{formatNoteTime(issue.reportedAt)}</small></td>
+              <td><span className={`status ${isOpen ? 'status-caution' : 'status-positive'}`}><i />{issue.status}</span>{!isOpen && <small>by {issue.solvedBy || '—'} · {formatNoteTime(issue.solvedAt)}</small>}</td>
+              <td><span className={`issue-duration ${isOpen ? 'is-open' : ''}`}><Clock3 size={13} />{isOpen ? `Open ${duration}` : `Lasted ${duration}`}</span></td>
+              <td className="issue-actions"><div>
+                {isOpen
+                  ? <button className="button button-secondary issue-solve" type="button" onClick={() => setSolving(issue)} disabled={busyId === issue.id}><Check size={14} />Mark solved</button>
+                  : <button className="icon-button" type="button" onClick={() => reopen(issue)} disabled={busyId === issue.id} aria-label={`Reopen ${issue.title}`} title="Reopen"><RotateCcw size={14} /></button>}
+                <button className="icon-button button-remove" type="button" onClick={() => remove(issue)} disabled={busyId === issue.id} aria-label={`Delete ${issue.title}`} title="Delete">{busyId === issue.id ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}</button>
+              </div></td>
+            </tr>;
+          })}
+          {!visible.length && <tr><td colSpan="5"><div className="table-empty">{category === 'Tech' ? <Wrench size={22} /> : <AlertCircle size={22} />}<strong>{empty[0]}</strong>{empty[1] && <span>{empty[1]}</span>}</div></td></tr>}
+        </tbody></table></div>
+        <div className="table-foot"><span>Showing {visible.length} of {mine.length} issues</span><span><i className="sync-dot" /> Saved to the Issues tab · times in Central</span></div>
+      </section>
+      {solving && <SolveIssuePopup issue={solving} defaultSolver={savedAuthor()} onClose={() => setSolving(null)} onSolve={async (values) => {
+        const issue = await post(`/api/issues/${encodeURIComponent(solving.id)}/solve`, values, 'Could not mark this issue solved.');
+        rememberAuthor(values.solvedBy);
+        replace(issue);
+        setSolving(null);
+        onToast(`Solved: ${issue.title}${issue.timeOpen ? ` · open ${issue.timeOpen}` : ''}`);
+      }} />}
+    </>
+  );
+}
+
+function SolveIssuePopup({ issue, defaultSolver, onClose, onSolve }) {
+  const [solvedBy, setSolvedBy] = useState(SCHEDULE_ADDED_BY.includes(defaultSolver) ? defaultSolver : '');
+  const [resolution, setResolution] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const closeOnEscape = (event) => { if (event.key === 'Escape' && !saving) onClose(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose, saving]);
+
+  async function submit(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      await onSolve({ solvedBy, resolution });
+    } catch (solveError) {
+      setError(solveError.message);
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="overlay is-centered" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
+      <section className="drawer note-popup" role="dialog" aria-modal="true" aria-labelledby="solve-issue-title">
+        <div className="drawer-header">
+          <div><span className="eyebrow">MARK SOLVED · {issue.id} · OPEN {(formatDuration(issueDuration(issue)) || '—').toUpperCase()}</span><h2 id="solve-issue-title">{issue.title}</h2></div>
+          <button className="icon-button" type="button" onClick={onClose} disabled={saving} aria-label="Close"><X size={17} /></button>
+        </div>
+        <form className="note-popup-body" onSubmit={submit}>
+          <div className="form-grid">
+            <label className="field field-wide">Solved by<select value={solvedBy} onChange={(event) => setSolvedBy(event.target.value)} required autoFocus><option value="" disabled>Choose…</option>{SCHEDULE_ADDED_BY.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
+            <label className="field field-wide">How was it solved? (optional)<textarea value={resolution} onChange={(event) => setResolution(event.target.value)} maxLength={1000} rows={3} placeholder="e.g. Restarted the router, replaced the toner" /></label>
+          </div>
+          {error && <div className="form-error" role="alert">{error}</div>}
+          <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={onClose} disabled={saving}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={15} />{saving ? 'Saving…' : 'Mark solved'}</button></div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function CredentialsPage({ onToast }) {
   const [records, setRecords] = useState([]);
   const [loadState, setLoadState] = useState('loading');
@@ -2825,11 +3041,11 @@ export default function App() {
     setPage(ISSUE_TABS[0].page);
   };
   const issueTab = ISSUE_TABS.find((tab) => tab.page === page);
-  const extraTab = EXTRA_TABS.find((tab) => tab.page === page) || issueTab;
+  const extraTab = EXTRA_TABS.find((tab) => tab.page === page);
   // The full intake is offered only on the Overview and All Clients pages.
   const showAddClient = page === 'dashboard' || page === 'clients';
   const onOnboardingPage = resultView === `case:${NEW_CLIENT_TYPE}`;
-  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit', schedule: 'Schedule' })[page] || extraTab?.label
+  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit', schedule: 'Schedule' })[page] || extraTab?.label || issueTab?.label
     || (resultView === 'court-dates' ? 'Court dates' : resultView.startsWith('case:') ? `${resultView.slice('case:'.length)} clients` : ({ payments: 'Payment list', 'follow-ups': 'Upcoming follow-ups', 'follow-ups-week': 'Follow-ups this week', clients: 'Client roster' })[resultView])
     || 'Overview';
   if (authStatus === 'checking') return <main className="login-screen"><img className="login-mark" src="/logo.png" alt="Loading" width="48" height="48" /></main>;
@@ -2888,6 +3104,8 @@ export default function App() {
                 ? <SchedulePage clients={clients} onSelectClient={setSelectedClient} onToast={setToast} />
               : page === 'credentials'
                 ? <CredentialsPage onToast={setToast} />
+              : issueTab
+                ? <IssuesPage key={issueTab.page} category={issueTab.category} onToast={setToast} />
               : extraTab
                 ? <ComingSoon key={extraTab.page} title={extraTab.label} icon={extraTab.icon} />
               : <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onShowSchedule={() => setPage('schedule')} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />}

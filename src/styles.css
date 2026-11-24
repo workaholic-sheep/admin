@@ -1082,3 +1082,26 @@ body { font-size: var(--type-body); }
 .note-cell-button { display: inline-flex; align-items: center; min-height: 30px; padding: 4px 8px; margin: -4px -8px; border: 1px solid transparent; border-radius: 8px; background: none; color: inherit; font: inherit; cursor: pointer; }
 .note-cell-button:hover, .note-cell-button:focus-visible { border-color: var(--line); background: rgb(47 100 150 / 8%); }
 [data-theme="dark"] .note-cell-button:hover, [data-theme="dark"] .note-cell-button:focus-visible { background: rgb(120 170 220 / 12%); }
+
+/* Issues (Tech / Other) */
+.issue-table td small { display: block; margin-top: 3px; color: #a0aaa2; font-size: var(--type-caption); }
+.issue-table td.issue-main { min-width: 260px; max-width: 460px; white-space: normal; }
+.issue-main strong { display: block; color: var(--ink); }
+.issue-table td small.issue-details { color: #7d8a81; white-space: pre-line; }
+.issue-table td small.issue-resolution { display: flex; align-items: flex-start; gap: 5px; color: #4d7b58; }
+.issue-resolution svg { flex: none; margin-top: 2px; }
+.issue-who { color: var(--ink); font-weight: 600; }
+.issue-duration { display: inline-flex; align-items: center; gap: 5px; color: #617167; font-weight: 600; }
+.issue-duration.is-open { color: #ad762e; }
+.issue-table tr.is-solved td { background: #fafbfa; }
+.issue-table th:last-child, .issue-table td:last-child { width: 1%; }
+.issue-actions > div { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+.issue-actions .icon-button { width: 30px; height: 30px; }
+.issue-solve { min-height: 30px; padding: 0 10px; white-space: nowrap; }
+[data-theme="dark"] .issue-main strong, [data-theme="dark"] .issue-who { color: var(--d-text); }
+[data-theme="dark"] .issue-table td small { color: var(--d-text-3); }
+[data-theme="dark"] .issue-table td small.issue-details { color: var(--d-text-2); }
+[data-theme="dark"] .issue-table td small.issue-resolution { color: var(--d-accent); }
+[data-theme="dark"] .issue-duration { color: var(--d-text-2); }
+[data-theme="dark"] .issue-duration.is-open { color: #e0b36f; }
+[data-theme="dark"] .issue-table tr.is-solved td { background: transparent; }
