@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
+  AlertCircle,
   ArrowRight,
   ArrowDownAZ,
   Briefcase,
@@ -18,7 +19,6 @@ import {
   Eye,
   EyeOff,
   FileSpreadsheet,
-  Globe,
   GripVertical,
   KeyRound,
   LayoutDashboard,
@@ -46,6 +46,7 @@ import {
   UserRound,
   UsersRound,
   Video,
+  Wrench,
   X,
 } from 'lucide-react';
 import { CASE_TYPES, NEW_CLIENT_TYPE, acceptsExistingClients, countCaseTypes,isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
@@ -71,9 +72,14 @@ const CENTRAL_TIME_ZONE = 'America/Chicago';
 // Extra sidebar tabs. Those without `built: true` show a "Coming soon" page for now.
 const EXTRA_TABS = [
   { page: 'pdf', label: 'PDF', icon: FileText },
-  { page: 'asylum', label: 'Asylum', icon: Globe },
   { page: 'forms', label: 'Forms', icon: ClipboardList },
   { page: 'credentials', label: 'Credentials', icon: KeyRound, built: true },
+];
+
+// Pages under the Issues group in the sidebar. Both show "Coming soon" for now.
+const ISSUE_TABS = [
+  { page: 'issues-tech', label: 'Tech Issues', icon: Wrench },
+  { page: 'issues-other', label: 'Other Issues', icon: AlertCircle },
 ];
 
 function useTheme() {
@@ -2486,6 +2492,12 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('nav-clients-open', String(clientsOpen)); } catch { /* remembered for this visit only */ }
   }, [clientsOpen]);
+  const [issuesOpen, setIssuesOpen] = useState(() => {
+    try { return localStorage.getItem('nav-issues-open') === 'true'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('nav-issues-open', String(issuesOpen)); } catch { /* remembered for this visit only */ }
+  }, [issuesOpen]);
   useEffect(() => {
     // A drag cancelled or dropped elsewhere still clears the sidebar highlight.
     const clear = () => setDropTarget('');
@@ -2806,7 +2818,14 @@ export default function App() {
     setPage('clients');
   };
   const inClientsSection = page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates');
-  const extraTab = EXTRA_TABS.find((tab) => tab.page === page);
+  // Clicking Issues opens its list and shows Tech Issues; clicking again folds the list away.
+  const toggleIssues = () => {
+    if (issuesOpen) return setIssuesOpen(false);
+    setIssuesOpen(true);
+    setPage(ISSUE_TABS[0].page);
+  };
+  const issueTab = ISSUE_TABS.find((tab) => tab.page === page);
+  const extraTab = EXTRA_TABS.find((tab) => tab.page === page) || issueTab;
   // The full intake is offered only on the Overview and All Clients pages.
   const showAddClient = page === 'dashboard' || page === 'clients';
   const onOnboardingPage = resultView === `case:${NEW_CLIENT_TYPE}`;
@@ -2836,7 +2855,14 @@ export default function App() {
               title={acceptsExistingClients(type) ? `Show ${type} clients, or drop clients here to add them to ${type}` : `Show ${type} clients (new clients only)`}
             ><span>{type}</span><span className="nav-count">{caseCounts[type]}</span></button>)}
           </div>}
-        </div><button className={`nav-item ${page === 'schedule' ? 'active' : ''}`} onClick={() => setPage('schedule')}><CalendarClock size={18} /><span>Schedule</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>
+        </div><button className={`nav-item ${page === 'schedule' ? 'active' : ''}`} onClick={() => setPage('schedule')}><CalendarClock size={18} /><span>Schedule</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}<div className="nav-group">
+          <div className="nav-group-head">
+            <button className={`nav-item ${issueTab && !issuesOpen ? 'active' : ''} ${issueTab ? 'is-current' : ''}`} onClick={toggleIssues} aria-expanded={issuesOpen} aria-controls="nav-issue-types"><AlertCircle size={18} /><span>Issues</span></button>
+          </div>
+          {issuesOpen && <div className="nav-children" id="nav-issue-types">
+            {ISSUE_TABS.map(({ page: tabPage, label }) => <button key={tabPage} className={`nav-child ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><span>{label}</span></button>)}
+          </div>}
+        </div></div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
       <main className="main-area">

@@ -1,5 +1,5 @@
 // Order here is the order shown in the sidebar, filters and the intake checkboxes.
-export const CASE_TYPES = ['Onboarding', 'VAWA', 'I-360', 'G-28', 'I-765', 'I-485', 'I-589'];
+export const CASE_TYPES = ['Onboarding', 'VAWA', 'I-360', 'G-28', 'I-765', 'I-485', 'I-589', 'Asylum'];
 
 // Onboarding is only for new clients: they join it from the Add client form, never by dragging
 // existing clients in from All clients.
