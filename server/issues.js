@@ -85,7 +85,7 @@ export function issueInput(body) {
 export function solveInput(body) {
   const resolution = String(body?.resolution ?? '').trim();
   if (resolution.length > 1000) throw new IssueError('The resolution must be 1,000 characters or fewer.');
-  return { solvedBy: person(body?.solvedBy, 'Choose who solved it.'), resolution };
+  return { resolution };
 }
 
 export function createIssues(tabs, setupMessage = '') {
@@ -143,7 +143,7 @@ export function createIssues(tabs, setupMessage = '') {
     solve: (id, input) => queued(async () => {
       const tab = await open();
       const existing = find(tab, id);
-      if (existing.status === 'Solved') throw new IssueError(`This issue was already marked solved by ${existing.solvedBy || 'someone'}.`, 409);
+      if (existing.status === 'Solved') throw new IssueError('This issue was already marked solved.', 409);
       const solvedAt = centralTimestamp();
       const start = centralToDate(existing.reportedAt);
       const end = centralToDate(solvedAt);

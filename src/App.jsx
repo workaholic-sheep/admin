@@ -1843,7 +1843,7 @@ function IssuesPage({ category, onToast }) {
   const [rowError, setRowError] = useState('');
   const [solving, setSolving] = useState(null);
   const [busyId, setBusyId] = useState('');
-  const [show, setShow] = useState('open');
+  const [show, setShow] = useState('all');
   const [search, setSearch] = useState('');
   const [now, setNow] = useState(() => new Date());
 
@@ -1892,7 +1892,7 @@ function IssuesPage({ category, onToast }) {
       const issue = await post('/api/issues', { ...form, category }, 'Could not save this issue.');
       rememberAuthor(form.reportedBy);
       setIssues((current) => [...current, issue]);
-      setShow((current) => current === 'solved' ? 'open' : current);
+      setShow((current) => current === 'solved' ? 'all' : current);
       onToast(`Issue logged: ${issue.title}`);
       setAdding(false);
     } catch (error) {
@@ -1980,7 +1980,7 @@ function IssuesPage({ category, onToast }) {
               <td className="issue-main"><strong>{issue.title}</strong>{issue.details && <small className="issue-details">{issue.details}</small>}{!isOpen && issue.resolution && <small className="issue-resolution"><Check size={12} />{issue.resolution}</small>}</td>
               <td><span className="issue-who">{issue.reportedBy || '—'}</span><small>{formatNoteTime(issue.reportedAt)}</small></td>
               <td className="issue-affected">{issue.affected ? issue.affected.split(',').map((name) => <span key={name} className="case-pill">{name.trim()}</span>) : <span className="muted">—</span>}</td>
-              <td><span className={`status ${isOpen ? 'status-caution' : 'status-positive'}`}><i />{issue.status}</span>{!isOpen && <small>by {issue.solvedBy || '—'} · {formatNoteTime(issue.solvedAt)}</small>}</td>
+              <td><span className={`status ${isOpen ? 'status-caution' : 'status-positive'}`}><i />{issue.status}</span>{!isOpen && <small>{formatNoteTime(issue.solvedAt)}</small>}</td>
               <td><span className={`issue-duration ${isOpen ? 'is-open' : ''}`}><Clock3 size={13} />{isOpen ? `Open ${duration}` : `Lasted ${duration}`}</span></td>
               <td className="issue-actions"><div>
                 {isOpen
@@ -1994,9 +1994,8 @@ function IssuesPage({ category, onToast }) {
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visible.length} of {mine.length} issues</span><span><i className="sync-dot" /> Saved to the Issues tab · times in Central</span></div>
       </section>
-      {solving && <SolveIssuePopup issue={solving} defaultSolver={savedAuthor()} onClose={() => setSolving(null)} onSolve={async (values) => {
+      {solving && <SolveIssuePopup issue={solving} onClose={() => setSolving(null)} onSolve={async (values) => {
         const issue = await post(`/api/issues/${encodeURIComponent(solving.id)}/solve`, values, 'Could not mark this issue solved.');
-        rememberAuthor(values.solvedBy);
         replace(issue);
         setSolving(null);
         onToast(`Solved: ${issue.title}${issue.timeOpen ? ` · open ${issue.timeOpen}` : ''}`);
@@ -2005,8 +2004,7 @@ function IssuesPage({ category, onToast }) {
   );
 }
 
-function SolveIssuePopup({ issue, defaultSolver, onClose, onSolve }) {
-  const [solvedBy, setSolvedBy] = useState(SCHEDULE_ADDED_BY.includes(defaultSolver) ? defaultSolver : '');
+function SolveIssuePopup({ issue, onClose, onSolve }) {
   const [resolution, setResolution] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -2021,7 +2019,7 @@ function SolveIssuePopup({ issue, defaultSolver, onClose, onSolve }) {
     setSaving(true);
     setError('');
     try {
-      await onSolve({ solvedBy, resolution });
+      await onSolve({ resolution });
     } catch (solveError) {
       setError(solveError.message);
       setSaving(false);
@@ -2037,8 +2035,7 @@ function SolveIssuePopup({ issue, defaultSolver, onClose, onSolve }) {
         </div>
         <form className="note-popup-body" onSubmit={submit}>
           <div className="form-grid">
-            <label className="field field-wide">Solved by<select value={solvedBy} onChange={(event) => setSolvedBy(event.target.value)} required autoFocus><option value="" disabled>Choose…</option>{SCHEDULE_ADDED_BY.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
-            <label className="field field-wide">How was it solved? (optional)<textarea value={resolution} onChange={(event) => setResolution(event.target.value)} maxLength={1000} rows={3} placeholder="e.g. Restarted the router, replaced the toner" /></label>
+            <label className="field field-wide">How was it solved? (optional)<textarea autoFocus value={resolution} onChange={(event) => setResolution(event.target.value)} maxLength={1000} rows={3} placeholder="e.g. Restarted the router, replaced the toner" /></label>
           </div>
           {error && <div className="form-error" role="alert">{error}</div>}
           <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={onClose} disabled={saving}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={15} />{saving ? 'Saving…' : 'Mark solved'}</button></div>
