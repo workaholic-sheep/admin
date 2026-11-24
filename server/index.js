@@ -8,11 +8,12 @@ import { createSessionAuth } from './session-auth.js';
 import { createReminderWorkbookStore } from './payment-reminders.js';
 import { CredentialError, createCredentialService, createCredentialWorkbookStore, credentialInput, credentialKeyFor } from './credentials.js';
 import { createWorkbookStore } from './workbook.js';
-import { CaseNotFoundError, CaseSetupError, createCaseAssignments } from './case-assignments.js';
+import { CaseNotFoundError, CaseSetupError, centralTimestamp, createCaseAssignments } from './case-assignments.js';
 import { SCHEDULE_ADDED_BY, TEAM_MEMBERS } from '../src/team.js';
 import { nameParts } from '../src/names.js';
 import { CASE_STATUSES } from '../src/case-status.js';
 import { ScheduleError, createSchedule, scheduleInput } from './schedule.js';
+import { CourtDateError, courtDateInput, createCourtDates, listNewCourtDates } from './court-dates.js';
 import { createGoogleTabs, createWorkbookTabs } from './sheet-tabs.js';
 import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
 import {
@@ -73,6 +74,7 @@ try {
 }
 const cases = createCaseAssignments(caseTabs, caseSetupMessage);
 const schedule = createSchedule(caseTabs, caseSetupMessage);
+const newCourtDates = createCourtDates(caseTabs, 'Court dates are saved in the Court_Dates tab of Clients_Additional_Info, which isn\'t connected yet (GOOGLE_CASES_SHEET_ID).', centralTimestamp);
 const SYNC_EVERY_MS = 60 * 1000;
 let lastSync = 0;
 // Without CREDENTIALS_KEY in production the rest of the app still runs; only the password manager reports that it needs setup.
@@ -340,11 +342,50 @@ app.post('/api/case-assignments', async (request, response, next) => {
   }
 });
 
+// Old tracker dates (COURT DATE LIST) and new ones (Court_Dates tab in Clients_Additional_Info),
+// tagged by `source`. Each loads on its own, so one failing still shows the other.
+// Adds, edits and deletes court dates in the Court_Dates tab (the old tracker is read-only here).
+// Edits and deletes send `expected` ({ clientId, clientName, date }) so a row that moved isn't touched.
+const courtDateRoute = (handler) => async (request, response, next) => {
+  try {
+    await handler(request, response);
+  } catch (error) {
+    if (error instanceof CourtDateError) return response.status(error.status).json({ error: error.message });
+    if (error instanceof SheetSetupError) return response.status(503).json({ error: error.message });
+    return next(error);
+  }
+};
+const expectedRow = (body) => ({ clientId: String(body?.expected?.clientId ?? ''), clientName: String(body?.expected?.clientName ?? ''), date: String(body?.expected?.date ?? '') });
+
+app.post('/api/court-dates', courtDateRoute(async (request, response) => {
+  response.status(201).json({ courtDate: await newCourtDates.add(courtDateInput(request.body, await store.list())) });
+}));
+
+app.put('/api/court-dates/:id', courtDateRoute(async (request, response) => {
+  const input = courtDateInput(request.body, [], { withClient: false });
+  response.json({ courtDate: await newCourtDates.update(request.params.id, expectedRow(request.body), input) });
+}));
+
+app.delete('/api/court-dates/:id', courtDateRoute(async (request, response) => {
+  response.json({ courtDate: await newCourtDates.remove(request.params.id, expectedRow(request.body)) });
+}));
+
 app.get('/api/court-dates', async (_request, response, next) => {
   try {
-    const courtDates = await store.listCourtDates();
-    const modifiedAt = useGoogleSheets ? new Date().toISOString() : (await stat(courtWorkbookPath)).mtime.toISOString();
-    response.json({ courtDates, modifiedAt, source: sourceName });
+    const [tracker, added] = await Promise.allSettled([store.listCourtDates(), listNewCourtDates(caseTabs)]);
+    if (tracker.status === 'rejected' && added.status === 'rejected') throw tracker.reason;
+    const trackerDates = tracker.status === 'fulfilled' ? tracker.value.map((event) => ({ ...event, source: 'tracker' })) : [];
+    const newDates = added.status === 'fulfilled' ? added.value : [];
+    const modifiedAt = useGoogleSheets ? new Date().toISOString() : ((await stat(courtWorkbookPath).catch(() => null))?.mtime || new Date()).toISOString();
+    response.json({
+      courtDates: [...newDates, ...trackerDates],
+      trackerError: tracker.status === 'rejected' ? tracker.reason?.message || 'Could not load the old court tracker.' : '',
+      newError: added.status === 'rejected'
+        ? added.reason?.message || 'Could not load the Court_Dates tab.'
+        : caseTabs ? '' : 'The Court_Dates tab is in the Clients_Additional_Info spreadsheet, which isn\'t connected yet (GOOGLE_CASES_SHEET_ID).',
+      modifiedAt,
+      source: sourceName,
+    });
   } catch (error) {
     next(error);
   }

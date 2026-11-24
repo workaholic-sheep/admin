@@ -136,6 +136,19 @@ tr:hover .row-arrow, .followup-open:hover .row-arrow { transform: translateX(2px
 .roster-heading { margin-bottom: 21px; }
 .roster-surface { overflow: hidden; animation: appear .4s ease both; }
 .roster-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.court-source-tabs { display: flex; gap: 4px; padding: 10px 16px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.court-source-tabs button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: #6f7f75; font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.court-source-tabs button.active { border-bottom-color: #3f7a55; color: #2f4a38; }
+.court-source-tabs button span { min-width: 20px; padding: 1px 6px; border-radius: 10px; background: #eef3ee; color: #5e7664; font-size: 10px; text-align: center; }
+.court-row-actions { width: 1%; white-space: nowrap; text-align: right; }
+.court-row-actions .icon-button + .icon-button { margin-left: 4px; }
+.court-row-error { margin: 10px 16px 0; }
+.court-date-group + .court-date-group { margin-top: 6px; }
+.court-date-group h4 { margin: 10px 0 0; color: #7a887f; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+[data-theme="dark"] .court-source-tabs button { color: var(--d-text-3); }
+[data-theme="dark"] .court-source-tabs button.active { border-bottom-color: var(--d-accent); color: var(--d-accent); }
+[data-theme="dark"] .court-source-tabs button span { background: var(--d-accent-bg); color: var(--d-accent); }
+[data-theme="dark"] .court-date-group h4 { color: var(--d-text-3); }
 .search-box { display: flex; align-items: center; gap: 9px; width: min(340px, 100%); height: 35px; padding: 0 10px; border: 1px solid #e1e7e1; border-radius: 5px; color: #819087; }
 .search-box:focus-within { border-color: #87a68d; box-shadow: 0 0 0 2px #e8f0e8; }
 .search-box input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 11px; }

@@ -727,8 +727,11 @@ function ClientDetails({ client, courtDates, onClose, onUpdate, onDelete, onSetT
   const frequencyOptions = [...new Set([form.frequency, ...frequencies].filter(Boolean))];
   const outcomeOptions = [...new Set([form.outcome, 'Responsive', 'Unresponsive'].filter(Boolean))];
   const clientCourtDates = courtDates
-    .filter((event) => normalizeClientName(event.clientName) === normalizeClientName(client.name))
+    .filter((event) => (event.clientId && client.id ? event.clientId === client.id : normalizeClientName(event.clientName) === normalizeClientName(client.name)))
     .sort((left, right) => left.date.localeCompare(right.date));
+  const courtDateGroups = COURT_SOURCES
+    .map((item) => ({ ...item, events: clientCourtDates.filter((event) => (event.source || 'tracker') === item.value) }))
+    .filter((group) => group.events.length);
   return (
     <div className="overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="drawer detail-drawer" role="dialog" aria-modal="true" aria-labelledby="client-name">
@@ -795,13 +798,13 @@ function ClientDetails({ client, courtDates, onClose, onUpdate, onDelete, onSetT
           </section>
           <section className="detail-court-dates">
             <div className="detail-court-heading"><h3>Court dates</h3><span>{clientCourtDates.length}</span></div>
-            {clientCourtDates.length ? <div className="court-date-list">{clientCourtDates.map((event) => <article className="court-date-item" key={event.id}>
-              <div className="court-date-main"><CalendarDays size={16} /><div><strong>{formatDate(event.date)}</strong><span>{event.time || 'Time not listed'}{event.status ? ` · ${event.status}` : ''}</span></div></div>
+            {courtDateGroups.length ? courtDateGroups.map((group) => <div className="court-date-group" key={group.value}><h4>{group.label}</h4><div className="court-date-list">{group.events.map((event) => <article className="court-date-item" key={event.id}>
+              <div className="court-date-main"><CalendarDays size={16} /><div><strong>{formatDate(event.date)}</strong><span>{event.time || 'Time not listed'}{event.hearingType ? ` · ${event.hearingType}` : ''}{event.status ? ` · ${event.status}` : ''}</span></div></div>
               {event.address && <p>{event.address}</p>}
               {(event.judge || event.country || event.alienNumber) && <small>{[event.judge && `Judge ${event.judge}`, event.country, event.alienNumber && `A# ${event.alienNumber}`].filter(Boolean).join(' · ')}</small>}
               {event.note && <small>{event.note}</small>}
               {event.additionalNote && <small>{event.additionalNote}</small>}
-            </article>)}</div> : <p className="court-date-empty">No court dates on file.</p>}
+            </article>)}</div></div>) : <p className="court-date-empty">No court dates on file.</p>}
           </section>
           <section className="detail-notes"><h3>Notes</h3><p>{client.notes || 'No notes recorded.'}</p></section>
         </>}
@@ -835,8 +838,9 @@ function Dashboard({ clients, courtDates, onShowClients, onShowResults, onShowSc
   const pendingPayments = clients.filter((client) => client.paymentStatus.toLowerCase() === 'pending').length;
   const caseTypeCounts = countCaseTypes(clients);
   const rosterNames = new Set(clients.map((client) => normalizeClientName(client.name)));
+  const rosterIds = new Set(clients.map((client) => client.id).filter(Boolean));
   const nextCourtDate = courtDates
-    .filter((event) => rosterNames.has(normalizeClientName(event.clientName)) && event.status.toLowerCase() !== 'done')
+    .filter((event) => (rosterIds.has(event.clientId) || rosterNames.has(normalizeClientName(event.clientName))) && String(event.status || '').toLowerCase() !== 'done')
     .map((event) => ({ ...event, daysUntil: daysUntil(event.date, today) }))
     .filter((event) => event.daysUntil !== null && event.daysUntil >= 0)
     .sort((left, right) => left.daysUntil - right.daysUntil)[0] || null;
@@ -854,7 +858,7 @@ function Dashboard({ clients, courtDates, onShowClients, onShowResults, onShowSc
       <div className="welcome-row"><div><span className="eyebrow">{new Intl.DateTimeFormat('en-US', { timeZone: CENTRAL_TIME_ZONE, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(now).toUpperCase()}</span><h1>{greeting(now)}.</h1><p className="page-subtitle">Here’s the client overview.</p></div><button className="button button-secondary" onClick={onShowClients}>View all clients <ArrowRight size={16} /></button></div>
       <div className="metric-grid">
         <Metric label="Schedules" value={nextAppointment ? `${nextAppointment.date === today ? 'Today' : formatDate(nextAppointment.date, { month: 'short', day: 'numeric' })} · ${nextAppointment.time}` : '—'} note={nextAppointment ? [nextAppointment.mode, nextAppointment.purpose, nextAppointment.clientName].filter(Boolean).join(' · ') + (upcomingAppointments.length > 1 ? ` (+${upcomingAppointments.length - 1} more)` : '') : 'No upcoming appointments'} tone="blue" icon={CalendarClock} featured onClick={onShowSchedule} />
-        <Metric label="Next court date" value={nextCourtDate ? formatDate(nextCourtDate.date, { month: 'short', day: 'numeric' }) : '—'} note={nextCourtDate?.clientName || 'No upcoming court date'} tone="green" icon={CalendarDays} featured onClick={() => onShowResults('court-dates')} />
+        <Metric label="Next court date" value={nextCourtDate ? formatDate(nextCourtDate.date, { month: 'short', day: 'numeric' }) : '—'} note={nextCourtDate ? (clients.find((client) => nextCourtDate.clientId && client.id === nextCourtDate.clientId)?.name || nextCourtDate.clientName) : 'No upcoming court date'} tone="green" icon={CalendarDays} featured onClick={() => onShowResults('court-dates')} />
         <Metric label="Total clients" value={clients.length} note="In MasterData" tone="green" icon={UsersRound} onClick={() => onShowResults('clients')} />
         <Metric label="Upcoming this week" value={dueSoon} note="Scheduled in the next 7 days" tone="amber" icon={CalendarClock} onClick={() => onShowResults('follow-ups-week')} />
         <Metric label="Payments pending" value={pendingPayments} note={`${clients.length ? Math.round((pendingPayments / clients.length) * 100) : 0}% of client roster`} tone="rose" icon={CreditCard} onClick={() => onShowResults('payments')} />
@@ -872,14 +876,128 @@ function Dashboard({ clients, courtDates, onShowClients, onShowResults, onShowSc
   );
 }
 
-function CourtDateList({ clients, courtDates, error = '', onSelectClient }) {
+// New court dates come from the Court_Dates tab and may name the client by Id; old tracker rows only by name.
+function courtDateClient(event, clientsById, clientsByName) {
+  return (event.clientId && clientsById.get(event.clientId)) || clientsByName.get(normalizeClientName(event.clientName));
+}
+
+const COURT_SOURCES = [
+  { value: 'court-dates', label: 'New court dates', foot: 'Synced from the Court_Dates tab', empty: 'Add rows to the Court_Dates tab in Clients_Additional_Info.' },
+  { value: 'tracker', label: 'Old tracker', foot: 'Synced from the old court tracker', empty: 'The old court date list is empty or not connected.' },
+];
+
+const HEARING_TYPES = ['Master Calendar Hearing', 'Individual Hearing', 'Bond Hearing'];
+
+const COURT_DATE_STATUSES = ['Scheduled', 'Rescheduled', 'Done', 'Cancelled'];
+
+// Pop-up after dropping a client on New court dates: set the date and details, saved to Court_Dates.
+// With `existing` (a Court_Dates row) it edits that row instead.
+function CourtDatePopup({ client, existing = null, onClose, onSaved }) {
+  const [form, setForm] = useState(() => (existing
+    ? { date: existing.date, time: timeTo24h(existing.time), hearingType: existing.hearingType || '', address: existing.address || '', judge: existing.judge || '', status: existing.status || 'Scheduled', note: existing.note || '' }
+    : { date: '', time: '', hearingType: '', address: '', judge: '', status: 'Scheduled', note: '' }));
+  const statuses = COURT_DATE_STATUSES.includes(form.status) ? COURT_DATE_STATUSES : [...COURT_DATE_STATUSES, form.status];
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const closeOnEscape = (event) => { if (event.key === 'Escape' && !saving) onClose(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose, saving]);
+  const update = (event) => setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      const response = existing
+        ? await fetch(`/api/court-dates/${encodeURIComponent(existing.id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, expected: courtDateExpected(existing) }) })
+        : await fetch('/api/court-dates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, clientId: client.id }) });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not save the court date.');
+      onSaved(result.courtDate);
+    } catch (saveError) {
+      setError(saveError.message);
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="overlay is-centered" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
+      <section className="drawer note-popup court-date-popup" role="dialog" aria-modal="true" aria-labelledby="court-date-popup-title">
+        <div className="drawer-header">
+          <div><span className="eyebrow">{existing ? 'EDIT COURT DATE' : 'NEW COURT DATE'}{client.id ? ` · ${client.id}` : ''}</span><h2 id="court-date-popup-title">{client.name}</h2></div>
+          <button className="icon-button" type="button" onClick={onClose} disabled={saving} aria-label="Close"><X size={17} /></button>
+        </div>
+        <form className="note-popup-body" onSubmit={save}>
+          <div className="form-grid">
+            <label className="field">Court date<input type="date" name="date" value={form.date} onChange={update} onClick={openPicker} required autoFocus /></label>
+            <label className="field">Time<input type="time" name="time" value={form.time} onChange={update} onClick={openPicker} step={60} /></label>
+            <label className="field">Hearing type<input name="hearingType" value={form.hearingType} onChange={update} list="hearing-types" maxLength={100} placeholder="e.g. Master Calendar Hearing" /><datalist id="hearing-types">{HEARING_TYPES.map((type) => <option key={type} value={type} />)}</datalist></label>
+            <label className="field">Status<select name="status" value={form.status} onChange={update}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
+            <label className="field field-wide">Court address<input name="address" value={form.address} onChange={update} maxLength={300} placeholder="Courthouse or address" /></label>
+            <label className="field field-wide">Judge<input name="judge" value={form.judge} onChange={update} maxLength={100} /></label>
+            <label className="field field-wide">Notes<textarea name="note" value={form.note} onChange={update} maxLength={1000} rows={3} /></label>
+          </div>
+          {error && <div className="form-error" role="alert">{error}</div>}
+          <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={onClose} disabled={saving}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={15} />{saving ? 'Saving…' : existing ? 'Save changes' : 'Save court date'}</button></div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+// What an edit or delete expects the Court_Dates row to still hold.
+const courtDateExpected = (event) => ({ clientId: event.clientId || '', clientName: event.clientName || '', date: event.date });
+
+function CourtDateList({ clients, courtDates, error = {}, onSelectClient, onCourtDateSaved, onCourtDateDeleted }) {
+  const [source, setSource] = useState('court-dates');
   const [when, setWhen] = useState('upcoming');
   const [search, setSearch] = useState('');
+  const [dropActive, setDropActive] = useState(false);
+  const [settingFor, setSettingFor] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [rowError, setRowError] = useState('');
+  const [deletingId, setDeletingId] = useState('');
+  async function remove(event) {
+    const name = event.client?.name || event.clientName;
+    if (!window.confirm(`Delete the court date for ${name} on ${formatDate(event.date)}? This removes the row from the Court_Dates tab.`)) return;
+    setRowError('');
+    setDeletingId(event.id);
+    try {
+      const response = await fetch(`/api/court-dates/${encodeURIComponent(event.id)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expected: courtDateExpected(event) }) });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not delete this court date.');
+      await onCourtDateDeleted(result.courtDate);
+    } catch (deleteError) {
+      setRowError(deleteError.message);
+    } finally {
+      setDeletingId('');
+    }
+  }
+  useEffect(() => {
+    const clear = () => setDropActive(false);
+    window.addEventListener('dragend', clear);
+    return () => window.removeEventListener('dragend', clear);
+  }, []);
+  const takesDrops = source === 'court-dates';
+  function dropClient(event) {
+    event.preventDefault();
+    setDropActive(false);
+    const client = clients.find((item) => item.id === clientIdsFromDrag(event)[0]);
+    if (client) setSettingFor(client);
+  }
   const today = centralDateKey();
   const clientsByName = new Map(clients.map((client) => [normalizeClientName(client.name), client]));
+  const clientsById = new Map(clients.filter((client) => client.id).map((client) => [client.id, client]));
+  const sourceInfo = COURT_SOURCES.find((item) => item.value === source);
+  const sourceError = source === 'tracker' ? error.tracker : error.new;
+  const countFor = (value) => courtDates.filter((event) => (event.source || 'tracker') === value).length;
   const events = courtDates
-    .map((event) => ({ ...event, client: clientsByName.get(normalizeClientName(event.clientName)), dueIn: daysUntil(event.date, today) }))
-    .map((event) => ({ ...event, isUpcoming: event.dueIn !== null && event.dueIn >= 0 && event.status.toLowerCase() !== 'done' }));
+    .filter((event) => (event.source || 'tracker') === source)
+    .map((event) => ({ ...event, client: courtDateClient(event, clientsById, clientsByName), dueIn: daysUntil(event.date, today) }))
+    .map((event) => ({ ...event, isUpcoming: event.dueIn !== null && event.dueIn >= 0 && String(event.status || '').toLowerCase() !== 'done' }));
   const upcomingCount = events.filter((event) => event.isUpcoming).length;
   const query = search.trim().toLowerCase();
   const visible = events
@@ -887,26 +1005,42 @@ function CourtDateList({ clients, courtDates, error = '', onSelectClient }) {
     .filter((event) => !query || [event.clientName, event.address, event.judge, event.alienNumber].some((value) => String(value || '').toLowerCase().includes(query)))
     .sort((left, right) => when === 'upcoming' ? left.date.localeCompare(right.date) : right.date.localeCompare(left.date));
   const open = (event) => event.client && onSelectClient(event.client);
-  const empty = error
-    ? ['Could not load court dates', error]
-    : !courtDates.length
-      ? ['No court dates found', 'The court date list is empty or not connected.']
+  const empty = sourceError
+    ? ['Could not load court dates', sourceError]
+    : !events.length
+      ? ['No court dates found', sourceInfo.empty]
       : ['No matching court dates', when === 'upcoming' ? 'Try “Past” or “All dates”.' : 'Try a different search.'];
 
   return (
     <>
       <div className="welcome-row roster-heading"><div><span className="eyebrow">COURT CALENDAR · {upcomingCount} UPCOMING · {events.length} TOTAL</span><h1>Court dates</h1><p className="page-subtitle">{visible.length} court dates shown</p></div></div>
-      <section className="surface roster-surface">
+      <p className="drag-hint"><GripVertical size={14} />{takesDrops ? 'Drag a client from the All clients list on the right into this list, then set the court date.' : 'The old tracker is read-only here. Add new court dates under New court dates.'}</p>
+      <div className={takesDrops ? 'case-layout' : undefined}>
+      <section
+        className={`surface roster-surface ${dropActive ? 'is-drop-active' : ''}`}
+        onDragOver={takesDrops ? (event) => { if (!isClientDrag(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; if (!dropActive) setDropActive(true); } : undefined}
+        onDragLeave={takesDrops ? (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropActive(false); } : undefined}
+        onDrop={takesDrops ? dropClient : undefined}
+      >
+        {dropActive && <div className="drop-banner" aria-hidden="true"><Plus size={16} />Drop to set a court date</div>}
+        <div className="court-source-tabs" role="tablist" aria-label="Court date list">
+          {COURT_SOURCES.map((item) => <button key={item.value} type="button" role="tab" aria-selected={source === item.value} className={source === item.value ? 'active' : ''} onClick={() => setSource(item.value)}>{item.label}<span>{countFor(item.value)}</span></button>)}
+        </div>
         <div className="roster-toolbar">
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, location, judge or A-number" aria-label="Search court dates" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
           <FilterMenu label="Show" value={when} onChange={setWhen} icon={CalendarDays} options={[{ value: 'upcoming', label: 'Upcoming' }, { value: 'past', label: 'Past or done' }, { value: 'all', label: 'All dates' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table court-results-table"><thead><tr><th>Client</th><th>Court date</th><th>Time</th><th>Location</th><th>Judge</th><th>Status</th></tr></thead><tbody>
-          {visible.map((event) => <tr key={event.id} className={event.client ? '' : 'row-static'} onClick={() => open(event)} tabIndex={event.client ? 0 : undefined} onKeyDown={(keyEvent) => keyEvent.key === 'Enter' && open(event)}><td><strong>{event.client?.name || event.clientName}</strong><small>{event.client ? event.client.id : 'Not matched to a client record'}</small></td><td>{formatDate(event.date)}{event.rescheduleDate && <small>Rescheduled</small>}</td><td>{event.time || '—'}</td><td>{event.address || '—'}</td><td>{event.judge || '—'}</td><td>{event.status || '—'}</td></tr>)}
-          {!visible.length && <tr><td colSpan="6"><div className="table-empty"><CalendarDays size={22} /><strong>{empty[0]}</strong><span>{empty[1]}</span></div></td></tr>}
+        {rowError && takesDrops && <div className="form-error court-row-error" role="alert">{rowError}</div>}
+        <div className="table-scroll"><table className="client-table court-results-table"><thead><tr><th>Client</th><th>Court date</th><th>Time</th><th>Location</th><th>Judge</th><th>Status</th>{takesDrops && <th><span className="sr-only">Actions</span></th>}</tr></thead><tbody>
+          {visible.map((event) => <tr key={event.id} className={event.client ? '' : 'row-static'} onClick={() => open(event)} tabIndex={event.client ? 0 : undefined} onKeyDown={(keyEvent) => keyEvent.key === 'Enter' && open(event)}><td><strong>{event.client?.name || event.clientName}</strong><small>{event.client ? event.client.id : 'Not matched to a client record'}</small></td><td>{formatDate(event.date)}{event.rescheduleDate && <small>Rescheduled</small>}{event.hearingType && <small>{event.hearingType}</small>}</td><td>{event.time || '—'}</td><td>{event.address || '—'}</td><td>{event.judge || '—'}</td><td>{event.status || '—'}</td>{takesDrops && <td className="court-row-actions" onClick={(clickEvent) => clickEvent.stopPropagation()} onKeyDown={(keyEvent) => keyEvent.stopPropagation()}><button className="icon-button" type="button" onClick={() => { setRowError(''); setEditing(event); }} aria-label={`Edit court date for ${event.client?.name || event.clientName}`} title="Edit"><Pencil size={14} /></button><button className="icon-button" type="button" onClick={() => remove(event)} disabled={deletingId === event.id} aria-label={`Delete court date for ${event.client?.name || event.clientName}`} title="Delete">{deletingId === event.id ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}</button></td>}</tr>)}
+          {!visible.length && <tr><td colSpan={takesDrops ? 7 : 6}><div className="table-empty"><CalendarDays size={22} /><strong>{empty[0]}</strong><span>{empty[1]}</span></div></td></tr>}
         </tbody></table></div>
-        <div className="table-foot"><span>Showing {visible.length} of {events.length} court dates</span><span><i className="sync-dot" /> Synced from court list</span></div>
+        <div className="table-foot"><span>Showing {visible.length} of {events.length} court dates</span><span><i className="sync-dot" /> {sourceInfo.foot}</span></div>
       </section>
+      {takesDrops && <ClientPicker clients={clients} target="New court dates" countLabel="clients" emptyLabel="No clients yet." addLabel="Set court date" onAdd={(client) => setSettingFor(client)} />}
+      </div>
+      {settingFor && <CourtDatePopup key={settingFor.id} client={settingFor} onClose={() => setSettingFor(null)} onSaved={(courtDate) => { setSettingFor(null); onCourtDateSaved(courtDate, 'added'); }} />}
+      {editing && <CourtDatePopup key={editing.id} client={{ id: editing.client?.id || editing.clientId, name: editing.client?.name || editing.clientName }} existing={editing} onClose={() => setEditing(null)} onSaved={(courtDate) => { setEditing(null); onCourtDateSaved(courtDate, 'updated'); }} />}
     </>
   );
 }
@@ -2030,11 +2164,23 @@ const PICKER_LIMIT = 200;
 
 // Right-hand panel on a case page: every client not yet in this case, ready to drag into the list.
 function CaseClientPicker({ clients, caseType, onAdd }) {
+  return <ClientPicker
+    clients={clients.filter((client) => !isCaseTypeSelected(client.caseType, caseType))}
+    target={caseType}
+    countLabel={`not in ${caseType}`}
+    emptyLabel={`Every client is already in ${caseType}.`}
+    onAdd={(client) => onAdd([client.id])}
+  />;
+}
+
+// Draggable list of clients; dropping one on the target (or pressing +) calls onAdd(client).
+function ClientPicker({ clients, target, countLabel, emptyLabel, onAdd, addLabel = `Add to ${target}` }) {
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState('');
   const text = query.trim().toLowerCase();
+  const caseType = target;
   const available = clients
-    .filter((client) => client.id && !isCaseTypeSelected(client.caseType, caseType))
+    .filter((client) => client.id)
     .filter((client) => !text || [client.name, client.id, client.email].some((value) => String(value || '').toLowerCase().includes(text)))
     .sort((left, right) => left.name.localeCompare(right.name));
   const shown = available.slice(0, PICKER_LIMIT);
@@ -2048,13 +2194,13 @@ function CaseClientPicker({ clients, caseType, onAdd }) {
 
   async function add(client) {
     setAdding(client.id);
-    try { await onAdd([client.id]); } finally { setAdding(''); }
+    try { await onAdd(client); } finally { setAdding(''); }
   }
 
   return (
     <aside className="surface case-picker" aria-label={`Clients to add to ${caseType}`}>
       <div className="case-picker-head">
-        <div><h2>All clients</h2><span>{available.length} not in {caseType}</span></div>
+        <div><h2>All clients</h2><span>{available.length} {countLabel}</span></div>
       </div>
       <label className="search-box case-picker-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name, ID or email" aria-label="Search all clients" />{query && <button className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={15} /></button>}</label>
       <p className="case-picker-hint"><GripVertical size={13} />Drag a client into the {caseType} list, or press +.</p>
@@ -2063,9 +2209,9 @@ function CaseClientPicker({ clients, caseType, onAdd }) {
           <GripVertical size={14} className="drag-grip" aria-hidden="true" />
           <span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span>
           <span className="case-picker-name"><strong>{client.name}</strong><small>{client.id}{client.caseType ? ` · ${client.caseType}` : ''}</small></span>
-          <button className="icon-button" type="button" onClick={() => add(client)} disabled={adding === client.id} aria-label={`Add ${client.name} to ${caseType}`} title={`Add to ${caseType}`}>{adding === client.id ? <LoaderCircle size={14} className="spin" /> : <Plus size={14} />}</button>
+          <button className="icon-button" type="button" onClick={() => add(client)} disabled={adding === client.id} aria-label={`${addLabel}: ${client.name}`} title={addLabel}>{adding === client.id ? <LoaderCircle size={14} className="spin" /> : <Plus size={14} />}</button>
         </li>)}
-        {!shown.length && <li className="case-picker-empty">{text ? 'No matching clients.' : `Every client is already in ${caseType}.`}</li>}
+        {!shown.length && <li className="case-picker-empty">{text ? 'No matching clients.' : emptyLabel}</li>}
       </ul>
       {available.length > PICKER_LIMIT && <p className="case-picker-more">Showing the first {PICKER_LIMIT} of {available.length}. Search to find others.</p>}
     </aside>
@@ -2363,7 +2509,7 @@ export default function App() {
   }, []);
   const [clients, setClients] = useState([]);
   const [courtDates, setCourtDates] = useState([]);
-  const [courtDatesError, setCourtDatesError] = useState('');
+  const [courtDatesError, setCourtDatesError] = useState({ tracker: '', new: '' });
   const [search, setSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState(null);
   // '' (closed), 'client' (full intake) or 'potential' (short Onboarding form).
@@ -2409,10 +2555,11 @@ export default function App() {
         if (!response.ok) throw new Error(result.error || 'Could not load court dates.');
         if (active) {
           setCourtDates(result.courtDates || []);
-          setCourtDatesError('');
+          setCourtDatesError({ tracker: result.trackerError || '', new: result.newError || '' });
         }
       } catch (error) {
-        if (active) setCourtDatesError(error.message || 'Could not load court dates.');
+        const message = error.message || 'Could not load court dates.';
+        if (active) setCourtDatesError({ tracker: message, new: message });
       }
     };
     const load = async () => {
@@ -2449,6 +2596,16 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  async function reloadCourtDates() {
+    try {
+      const response = await fetch('/api/court-dates');
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) return;
+      setCourtDates(result.courtDates || []);
+      setCourtDatesError({ tracker: result.trackerError || '', new: result.newError || '' });
+    } catch { /* the regular refresh will try again */ }
+  }
+
   async function refreshWorkbook() {
     setRefreshing(true);
     try {
@@ -2459,9 +2616,10 @@ export default function App() {
       const courtResult = await courtResponse.json().catch(() => ({}));
       if (courtResponse.ok) {
         setCourtDates(courtResult.courtDates || []);
-        setCourtDatesError('');
+        setCourtDatesError({ tracker: courtResult.trackerError || '', new: courtResult.newError || '' });
       } else {
-        setCourtDatesError(courtResult.error || 'Could not load court dates.');
+        const message = courtResult.error || 'Could not load court dates.';
+        setCourtDatesError({ tracker: message, new: message });
       }
       setClients(result.clients);
       setCaseError(result.caseError || '');
@@ -2696,7 +2854,7 @@ export default function App() {
               : page === 'payments'
                 ? <PaymentReminders clients={clients} />
               : page === 'court-dates' || resultView === 'court-dates'
-                ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} />
+                ? <CourtDateList clients={clients} courtDates={courtDates} error={courtDatesError} onSelectClient={setSelectedClient} onCourtDateSaved={(courtDate, verb) => { setCourtDates((current) => [courtDate, ...current.filter((item) => item.id !== courtDate.id)]); setToast(`Court date ${verb} for ${courtDate.clientName}`); }} onCourtDateDeleted={async (courtDate) => { setCourtDates((current) => current.filter((item) => item.id !== courtDate.id)); setToast(`Court date deleted for ${courtDate.clientName}`); await reloadCourtDates(); }} />
                 : resultView
                   ? <ClientList key={resultView} clients={clients} search={search} onSearch={setSearch} onSelectClient={setSelectedClient} onAssignCaseType={assignCaseType} onDeleteClients={bulkDeleteClients} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} notesVersion={notesVersion} view={resultView} />
               : page === 'schedule'
