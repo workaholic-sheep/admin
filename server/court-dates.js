@@ -14,16 +14,25 @@ const ALIASES = {
   date: ['courtdate', 'date', 'hearingdate'],
   rescheduleDate: ['rescheduledate', 'rescheduled', 'newdate', 'rescheduledto'],
   time: ['time', 'courttime', 'hearingtime', 'timect'],
-  address: ['address', 'courtaddress', 'location', 'court', 'courtlocation'],
-  judge: ['judge', 'judgename'],
-  hearingType: ['hearingtype', 'type', 'hearing'],
+  mode: ['mode', 'hearingmode', 'attendance', 'format', 'onlineorinperson', 'onlineinperson', 'type'],
+  address: ['address', 'courtaddress', 'location', 'court', 'courtlocation', 'locationlink', 'link', 'courtaddresslink'],
   alienNumber: ['aliennumber', 'anumber', 'a', 'alien'],
   country: ['country'],
   status: ['status'],
   note: ['note', 'notes', 'comment', 'comments'],
 };
 
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+export const COURT_MODES = ['Online', 'In Person'];
+// Reads what staff type ("zoom", "in-person") as one of COURT_MODES; anything else is kept as typed.
+function courtMode(value) {
+  const text = key(value);
+  if (!text) return '';
+  if (/online|zoom|virtual|video|webex|remote|teams/.test(text)) return 'Online';
+  if (/person|onsite|incourt/.test(text)) return 'In Person';
+  return String(value).trim();
+}
+
+const MONTHS =['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const pad2 = (value) => String(value).padStart(2, '0');
 
 // Sheet dates come back as displayed text: 11/20/2026, 2026-11-20, Nov 20, 2026, or a serial number.
@@ -80,8 +89,7 @@ export function readCourtDatesTab(tab) {
       rescheduleDate,
       time: cell(row, 'time'),
       address: cell(row, 'address'),
-      judge: cell(row, 'judge'),
-      hearingType: cell(row, 'hearingType'),
+      mode: courtMode(cell(row, 'mode')),
       alienNumber: cell(row, 'alienNumber'),
       country: cell(row, 'country'),
       status: cell(row, 'status'),
@@ -107,12 +115,12 @@ export class CourtDateError extends Error {
 
 // Heading used when the app has to add a column the tab doesn't have yet.
 const HEADINGS = {
-  clientId: 'Client Id', clientName: 'Client Name', date: 'Court Date', time: 'Time', address: 'Court Address',
-  judge: 'Judge', hearingType: 'Hearing Type', status: 'Status', note: 'Notes', createdAt: 'Created At (CT)',
+  clientId: 'Client Id', clientName: 'Client Name', date: 'Court Date', time: 'Time', mode: 'Mode',
+  address: 'Location / Link', status: 'Status', note: 'Notes', createdAt: 'Created At (CT)',
 };
 ALIASES.createdAt = ['createdatct', 'createdat', 'created', 'dateadded'];
 const ALWAYS = ['clientId', 'clientName', 'date'];
-const LIMITS = { address: 300, judge: 100, hearingType: 100, status: 50, note: 1000 };
+const LIMITS = { address: 500, status: 50, note: 1000 };
 
 function time12(value) {
   const match = String(value ?? '').match(/^([01]\d|2[0-3]):([0-5]\d)$/);
@@ -136,7 +144,9 @@ export function courtDateInput(body, clients, { withClient = true } = {}) {
   const rawTime = String(input.time ?? '').trim();
   const time = rawTime ? time12(rawTime) : '';
   if (rawTime && !time) throw new CourtDateError('Choose a valid time.');
-  const result = client ? { clientId, clientName: client.name, date, time } : { date, time };
+  const mode = String(input.mode ?? '').trim();
+  if (!COURT_MODES.includes(mode)) throw new CourtDateError(`Choose ${COURT_MODES.join(' or ')}.`);
+  const result = client ? { clientId, clientName: client.name, date, time, mode } : { date, time, mode };
   for (const [field, limit] of Object.entries(LIMITS)) {
     const value = String(input[field] ?? '').trim();
     if (value.length > limit) throw new CourtDateError(`${HEADINGS[field]} must be ${limit} characters or fewer.`);
@@ -149,7 +159,7 @@ export function courtDateInput(body, clients, { withClient = true } = {}) {
 const sheetDate = (date) => `${date.slice(5, 7)}/${date.slice(8, 10)}/${date.slice(0, 4)}`;
 const sameName = (left, right) => key(left) === key(right);
 // Fields an edit may change; the client and Created At stay as they were.
-const EDITABLE = ['date', 'time', 'address', 'judge', 'hearingType', 'status', 'note'];
+const EDITABLE = ['date', 'time', 'mode', 'address', 'status', 'note'];
 
 // Adds headings for any of `fields` the tab lacks (Client Name is covered by First / Last Name columns).
 async function withColumns(tabs, tab, fields) {

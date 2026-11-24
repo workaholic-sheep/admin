@@ -799,7 +799,7 @@ function ClientDetails({ client, courtDates, onClose, onUpdate, onDelete, onSetT
           <section className="detail-court-dates">
             <div className="detail-court-heading"><h3>Court dates</h3><span>{clientCourtDates.length}</span></div>
             {courtDateGroups.length ? courtDateGroups.map((group) => <div className="court-date-group" key={group.value}><h4>{group.label}</h4><div className="court-date-list">{group.events.map((event) => <article className="court-date-item" key={event.id}>
-              <div className="court-date-main"><CalendarDays size={16} /><div><strong>{formatDate(event.date)}</strong><span>{event.time || 'Time not listed'}{event.hearingType ? ` · ${event.hearingType}` : ''}{event.status ? ` · ${event.status}` : ''}</span></div></div>
+              <div className="court-date-main"><CalendarDays size={16} /><div><strong>{formatDate(event.date)}</strong><span>{event.time || 'Time not listed'}{event.mode ? ` · ${event.mode}` : ''}{event.status ? ` · ${event.status}` : ''}</span></div></div>
               {event.address && <p>{event.address}</p>}
               {(event.judge || event.country || event.alienNumber) && <small>{[event.judge && `Judge ${event.judge}`, event.country, event.alienNumber && `A# ${event.alienNumber}`].filter(Boolean).join(' · ')}</small>}
               {event.note && <small>{event.note}</small>}
@@ -839,8 +839,10 @@ function Dashboard({ clients, courtDates, onShowClients, onShowResults, onShowSc
   const caseTypeCounts = countCaseTypes(clients);
   const rosterNames = new Set(clients.map((client) => normalizeClientName(client.name)));
   const rosterIds = new Set(clients.map((client) => client.id).filter(Boolean));
+  // Only the new Court_Dates list; the old tracker no longer drives the Overview.
   const nextCourtDate = courtDates
-    .filter((event) => (rosterIds.has(event.clientId) || rosterNames.has(normalizeClientName(event.clientName))) && String(event.status || '').toLowerCase() !== 'done')
+    .filter((event) => event.source === 'court-dates')
+    .filter((event) => (rosterIds.has(event.clientId) || rosterNames.has(normalizeClientName(event.clientName))) && !['done', 'cancelled'].includes(String(event.status || '').toLowerCase()))
     .map((event) => ({ ...event, daysUntil: daysUntil(event.date, today) }))
     .filter((event) => event.daysUntil !== null && event.daysUntil >= 0)
     .sort((left, right) => left.daysUntil - right.daysUntil)[0] || null;
@@ -886,7 +888,7 @@ const COURT_SOURCES = [
   { value: 'tracker', label: 'Old tracker', foot: 'Synced from the old court tracker', empty: 'The old court date list is empty or not connected.' },
 ];
 
-const HEARING_TYPES = ['Master Calendar Hearing', 'Individual Hearing', 'Bond Hearing'];
+const COURT_MODES = ['Online', 'In Person'];
 
 const COURT_DATE_STATUSES = ['Scheduled', 'Rescheduled', 'Done', 'Cancelled'];
 
@@ -894,8 +896,8 @@ const COURT_DATE_STATUSES = ['Scheduled', 'Rescheduled', 'Done', 'Cancelled'];
 // With `existing` (a Court_Dates row) it edits that row instead.
 function CourtDatePopup({ client, existing = null, onClose, onSaved }) {
   const [form, setForm] = useState(() => (existing
-    ? { date: existing.date, time: timeTo24h(existing.time), hearingType: existing.hearingType || '', address: existing.address || '', judge: existing.judge || '', status: existing.status || 'Scheduled', note: existing.note || '' }
-    : { date: '', time: '', hearingType: '', address: '', judge: '', status: 'Scheduled', note: '' }));
+    ? { date: existing.date, time: timeTo24h(existing.time), mode: COURT_MODES.includes(existing.mode) ? existing.mode : '', address: existing.address || '', status: existing.status || 'Scheduled', note: existing.note || '' }
+    : { date: '', time: '', mode: '', address: '', status: 'Scheduled', note: '' }));
   const statuses = COURT_DATE_STATUSES.includes(form.status) ? COURT_DATE_STATUSES : [...COURT_DATE_STATUSES, form.status];
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -934,10 +936,9 @@ function CourtDatePopup({ client, existing = null, onClose, onSaved }) {
           <div className="form-grid">
             <label className="field">Court date<input type="date" name="date" value={form.date} onChange={update} onClick={openPicker} required autoFocus /></label>
             <label className="field">Time<input type="time" name="time" value={form.time} onChange={update} onClick={openPicker} step={60} /></label>
-            <label className="field">Hearing type<input name="hearingType" value={form.hearingType} onChange={update} list="hearing-types" maxLength={100} placeholder="e.g. Master Calendar Hearing" /><datalist id="hearing-types">{HEARING_TYPES.map((type) => <option key={type} value={type} />)}</datalist></label>
-            <label className="field">Status<select name="status" value={form.status} onChange={update}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
-            <label className="field field-wide">Court address<input name="address" value={form.address} onChange={update} maxLength={300} placeholder="Courthouse or address" /></label>
-            <label className="field field-wide">Judge<input name="judge" value={form.judge} onChange={update} maxLength={100} /></label>
+            <fieldset className="case-type-picker field-wide"><legend>Online or in person</legend><div className="case-type-options">{COURT_MODES.map((mode) => <label key={mode} className={`case-type-option ${form.mode === mode ? 'selected' : ''}`}><input type="radio" name="mode" value={mode} checked={form.mode === mode} onChange={update} required />{mode}</label>)}</div></fieldset>
+            <label className="field field-wide">{form.mode === 'Online' ? 'Online link' : 'Court address'}<input name="address" value={form.address} onChange={update} maxLength={500} placeholder={form.mode === 'Online' ? 'https://…' : 'Courthouse or address'} /></label>
+            <label className="field field-wide">Status<select name="status" value={form.status} onChange={update}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
             <label className="field field-wide">Notes<textarea name="note" value={form.note} onChange={update} maxLength={1000} rows={3} /></label>
           </div>
           {error && <div className="form-error" role="alert">{error}</div>}
@@ -1027,12 +1028,12 @@ function CourtDateList({ clients, courtDates, error = {}, onSelectClient, onCour
           {COURT_SOURCES.map((item) => <button key={item.value} type="button" role="tab" aria-selected={source === item.value} className={source === item.value ? 'active' : ''} onClick={() => setSource(item.value)}>{item.label}<span>{countFor(item.value)}</span></button>)}
         </div>
         <div className="roster-toolbar">
-          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, location, judge or A-number" aria-label="Search court dates" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={takesDrops ? 'Search name, location or link' : 'Search name, location, judge or A-number'} aria-label="Search court dates" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
           <FilterMenu label="Show" value={when} onChange={setWhen} icon={CalendarDays} options={[{ value: 'upcoming', label: 'Upcoming' }, { value: 'past', label: 'Past or done' }, { value: 'all', label: 'All dates' }]} />
         </div>
         {rowError && takesDrops && <div className="form-error court-row-error" role="alert">{rowError}</div>}
-        <div className="table-scroll"><table className="client-table court-results-table"><thead><tr><th>Client</th><th>Court date</th><th>Time</th><th>Location</th><th>Judge</th><th>Status</th>{takesDrops && <th><span className="sr-only">Actions</span></th>}</tr></thead><tbody>
-          {visible.map((event) => <tr key={event.id} className={event.client ? '' : 'row-static'} onClick={() => open(event)} tabIndex={event.client ? 0 : undefined} onKeyDown={(keyEvent) => keyEvent.key === 'Enter' && open(event)}><td><strong>{event.client?.name || event.clientName}</strong><small>{event.client ? event.client.id : 'Not matched to a client record'}</small></td><td>{formatDate(event.date)}{event.rescheduleDate && <small>Rescheduled</small>}{event.hearingType && <small>{event.hearingType}</small>}</td><td>{event.time || '—'}</td><td>{event.address || '—'}</td><td>{event.judge || '—'}</td><td>{event.status || '—'}</td>{takesDrops && <td className="court-row-actions" onClick={(clickEvent) => clickEvent.stopPropagation()} onKeyDown={(keyEvent) => keyEvent.stopPropagation()}><button className="icon-button" type="button" onClick={() => { setRowError(''); setEditing(event); }} aria-label={`Edit court date for ${event.client?.name || event.clientName}`} title="Edit"><Pencil size={14} /></button><button className="icon-button" type="button" onClick={() => remove(event)} disabled={deletingId === event.id} aria-label={`Delete court date for ${event.client?.name || event.clientName}`} title="Delete">{deletingId === event.id ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}</button></td>}</tr>)}
+        <div className="table-scroll"><table className="client-table court-results-table"><thead><tr><th>Client</th><th>Court date</th><th>Time</th>{takesDrops ? <><th>Mode</th><th>Location / link</th></> : <><th>Location</th><th>Judge</th></>}<th>Status</th>{takesDrops && <th><span className="sr-only">Actions</span></th>}</tr></thead><tbody>
+          {visible.map((event) => <tr key={event.id} className={event.client ? '' : 'row-static'} onClick={() => open(event)} tabIndex={event.client ? 0 : undefined} onKeyDown={(keyEvent) => keyEvent.key === 'Enter' && open(event)}><td><strong>{event.client?.name || event.clientName}</strong><small>{event.client ? event.client.id : 'Not matched to a client record'}</small></td><td>{formatDate(event.date)}{event.rescheduleDate && <small>Rescheduled</small>}</td><td>{event.time || '—'}</td>{takesDrops ? <><td>{event.mode || '—'}</td><td>{event.address || '—'}</td></> : <><td>{event.address || '—'}</td><td>{event.judge || '—'}</td></>}<td>{event.status || '—'}</td>{takesDrops && <td className="court-row-actions" onClick={(clickEvent) => clickEvent.stopPropagation()} onKeyDown={(keyEvent) => keyEvent.stopPropagation()}><button className="icon-button" type="button" onClick={() => { setRowError(''); setEditing(event); }} aria-label={`Edit court date for ${event.client?.name || event.clientName}`} title="Edit"><Pencil size={14} /></button><button className="icon-button" type="button" onClick={() => remove(event)} disabled={deletingId === event.id} aria-label={`Delete court date for ${event.client?.name || event.clientName}`} title="Delete">{deletingId === event.id ? <LoaderCircle size={14} className="spin" /> : <Trash2 size={14} />}</button></td>}</tr>)}
           {!visible.length && <tr><td colSpan={takesDrops ? 7 : 6}><div className="table-empty"><CalendarDays size={22} /><strong>{empty[0]}</strong><span>{empty[1]}</span></div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visible.length} of {events.length} court dates</span><span><i className="sync-dot" /> {sourceInfo.foot}</span></div>
