@@ -42,6 +42,7 @@ import {
   Sun,
   Trash2,
   Upload,
+  UserPlus,
   UserRound,
   UsersRound,
   Video,
@@ -496,7 +497,9 @@ function applyScan(current, result) {
   return { next, filled };
 }
 
-function ClientForm({ onClose, onCreated }) {
+// The full client intake, or (potential) a short form for a prospective client that goes
+// straight into Onboarding.
+function ClientForm({ onClose, onCreated, potential = false }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [form, setForm] = useState({
@@ -555,7 +558,7 @@ function ClientForm({ onClose, onCreated }) {
       const response = await fetch('/api/clients', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(potential ? { ...form, caseType: NEW_CLIENT_TYPE } : form),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Unable to add this client.');
@@ -571,12 +574,29 @@ function ClientForm({ onClose, onCreated }) {
       <section className="drawer intake-drawer" role="dialog" aria-modal="true" aria-labelledby="intake-title">
         <div className="drawer-header">
           <div>
-            <span className="eyebrow">NEW RECORD</span>
-            <h2 id="intake-title">Client intake</h2>
+            <span className="eyebrow">{potential ? 'ONBOARDING' : 'NEW RECORD'}</span>
+            <h2 id="intake-title">{potential ? 'Potential client' : 'Client intake'}</h2>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close intake"><X size={18} /></button>
         </div>
-        <form onSubmit={submit} className="intake-form">
+        {potential ? <form onSubmit={submit} className="intake-form">
+          <div className="form-section-title"><span>01</span><h3>Contact</h3></div>
+          <div className="form-grid">
+            <NameFields form={form} onChange={update} scanned={scanned} autoFocus />
+            <label className="field">Email<input name="email" type="email" value={form.email} onChange={update} maxLength={180} placeholder="name@example.com" /></label>
+            <label className="field">Phone<input name="phone" value={form.phone} onChange={update} maxLength={40} placeholder="Phone number" /></label>
+            <label className="field">Translator needed<select name="translator" value={form.translator} onChange={update}><option>No</option><option>Yes</option></select><ChevronDown size={15} /></label>
+          </div>
+          <div className="form-section-title"><span>02</span><h3>Follow-up</h3></div>
+          <div className="form-grid">
+            <label className="field">Date contacted<input type="date" name="lastContactDate" value={form.lastContactDate} onChange={update} /></label>
+            <label className="field">Next contact<input type="date" name="nextContactDate" value={form.nextContactDate} onChange={update} /></label>
+            <label className="field field-wide">Notes<textarea name="notes" value={form.notes} onChange={update} rows={4} maxLength={2000} placeholder="What they need, how they found us, consultation details…" /></label>
+          </div>
+          {error && <div className="form-error" role="alert">{error}</div>}
+          <div className="form-footer"><span>Saved to MasterData and added to Onboarding</span><button className="button button-primary" type="submit" disabled={saving}><UserPlus size={16} />{saving ? 'Saving…' : 'Add potential client'}</button></div>
+        </form>
+        : <form onSubmit={submit} className="intake-form">
           <DocumentScanner onScanned={fillFromScan} />
           <div className="form-section-title"><span>01</span><h3>Client details</h3></div>
           <div className="form-grid">
@@ -602,7 +622,7 @@ function ClientForm({ onClose, onCreated }) {
           </div>
           {error && <div className="form-error" role="alert">{error}</div>}
           <div className="form-footer"><span>Saved to MasterData</span><button className="button button-primary" type="submit" disabled={saving}><Plus size={16} />{saving ? 'Saving…' : 'Add client'}</button></div>
-        </form>
+        </form>}
       </section>
     </div>
   );
@@ -2214,7 +2234,7 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
             <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setBulkDeleting(false)} disabled={bulkBusy}>Cancel</button><button className="button button-danger" type="submit" disabled={bulkConfirm.trim() !== 'DELETE' || !bulkDeletedBy || bulkBusy}><Trash2 size={15} />{bulkBusy ? `Deleting ${selected.size}…` : 'Delete permanently'}</button></div>
           </form>}
         </div>
-        : <p className="drag-hint"><GripVertical size={14} />{!caseType ? 'Tip: drag a client onto a case type in the sidebar, or tick several and drag them together.' : takesDrops ? `Drag clients from the All clients list on the right into this list to add them to ${caseType}.` : `New clients appear here when ${caseType} is ticked on the Add client form.`}</p>}
+        : <p className="drag-hint"><GripVertical size={14} />{!caseType ? 'Tip: drag a client onto a case type in the sidebar, or tick several and drag them together.' : takesDrops ? `Drag clients from the All clients list on the right into this list to add them to ${caseType}.` : 'Use Add potential client (top right) for a new prospect. Clients added with Onboarding ticked also appear here.'}</p>}
       <div className={takesDrops ? 'case-layout' : undefined}>
       <section
         className={`surface roster-surface ${dropActive ? 'is-drop-active' : ''}`}
@@ -2233,7 +2253,7 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
         </div>
         <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th>{caseType ? <><th>Status</th><th>Team member</th><th>Notes</th></> : <th>Case type</th>}{hasFrequency && <th>Meeting frequency</th>}{hasNextContact && <th>Next contact</th>}{hasPayment && <th>Payment</th>}<th aria-label="Open client" /></tr></thead><tbody>
           {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td>{caseType ? <><td><CaseStatusSelect value={client.caseStatus?.[caseType] || 'Not Started'} onChange={(status) => onSetCaseStatus(client, caseType, status)} label={`Status of ${client.name}'s ${caseType} case`} /></td><td><TeamSelect value={client.caseTeam?.[caseType] || ''} onChange={(member) => onSetTeamMember(client, caseType, member)} label={`Team member for ${client.name}'s ${caseType} case`} /></td><td onClick={(event) => event.stopPropagation()}><button className="note-cell-button" type="button" onClick={() => setNotesClient(client)} disabled={!client.id} aria-label={`Notes for ${client.name}'s ${caseType} case`} title="View or add notes"><NoteSummary entry={noteSummary.get(client.id)} /></button></td></> : <td><CaseTypePills value={client.caseType} team={client.caseTeam} status={client.caseStatus} /></td>}{hasFrequency && <td>{client.frequency || <span className="muted">Not set</span>}</td>}{hasNextContact && <td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td>}{hasPayment && <td><Status value={client.paymentStatus} /></td>}<td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
-          {!visibleClients.length && <tr><td colSpan={3 + (caseType ? 3 : 1) + [hasFrequency, hasNextContact, hasPayment].filter(Boolean).length}><div className="table-empty">{caseType && !clients.some((client) => isCaseTypeSelected(client.caseType, caseType)) ? <><GripVertical size={22} /><strong>No clients in {caseType} yet</strong><span>{takesDrops ? 'Drag clients here from the All clients list on the right.' : 'Add a new client with Onboarding ticked.'}</span></> : <><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></>}</div></td></tr>}
+          {!visibleClients.length && <tr><td colSpan={3 + (caseType ? 3 : 1) + [hasFrequency, hasNextContact, hasPayment].filter(Boolean).length}><div className="table-empty">{caseType && !clients.some((client) => isCaseTypeSelected(client.caseType, caseType)) ? <><GripVertical size={22} /><strong>No clients in {caseType} yet</strong><span>{takesDrops ? 'Drag clients here from the All clients list on the right.' : 'Click Add potential client to add the first one.'}</span></> : <><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></>}</div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visibleClients.length} of {clients.length}</span><span><i className="sync-dot" /> Synced from MasterData</span></div>
       </section>
@@ -2346,7 +2366,8 @@ export default function App() {
   const [courtDatesError, setCourtDatesError] = useState('');
   const [search, setSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState(null);
-  const [intakeOpen, setIntakeOpen] = useState(false);
+  // '' (closed), 'client' (full intake) or 'potential' (short Onboarding form).
+  const [intakeOpen, setIntakeOpen] = useState('');
   const [loadError, setLoadError] = useState('');
   const [caseError, setCaseError] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -2595,10 +2616,12 @@ export default function App() {
     setClients((current) => [...current, result.client].sort((left, right) => left.name.localeCompare(right.name)));
     setLastUpdated(result.modifiedAt);
     setDataSource(result.source || dataSource);
-    setIntakeOpen(false);
-    setPage('clients');
+    const potential = intakeOpen === 'potential';
+    setIntakeOpen('');
+    // A potential client stays on the Onboarding page, where they now appear.
+    setPage(potential ? `results:case:${NEW_CLIENT_TYPE}` : 'clients');
     setSearch(result.client.name);
-    setToast(`Submitted: ${result.client.name}`);
+    setToast(`${potential ? 'Potential client added' : 'Submitted'}: ${result.client.name}`);
     if (result.caseError) setCaseError(result.caseError);
   }
 
@@ -2625,7 +2648,9 @@ export default function App() {
   };
   const inClientsSection = page === 'clients' || (page.startsWith('results:') && page !== 'results:court-dates');
   const extraTab = EXTRA_TABS.find((tab) => tab.page === page);
-  const showAddClient = page === 'dashboard' || page === 'clients' || Boolean(resultView);
+  // The full intake is offered only on the Overview and All Clients pages.
+  const showAddClient = page === 'dashboard' || page === 'clients';
+  const onOnboardingPage = resultView === `case:${NEW_CLIENT_TYPE}`;
   const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit', schedule: 'Schedule' })[page] || extraTab?.label
     || (resultView === 'court-dates' ? 'Court dates' : resultView.startsWith('case:') ? `${resultView.slice('case:'.length)} clients` : ({ payments: 'Payment list', 'follow-ups': 'Upcoming follow-ups', 'follow-ups-week': 'Follow-ups this week', clients: 'Client roster' })[resultView])
     || 'Overview';
@@ -2656,7 +2681,9 @@ export default function App() {
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
       <main className="main-area">
-        <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span>/</span><b>{pageTitle}</b></div><div className="topbar-actions"><CentralClock /><span className="sync-state"><i className="sync-dot" />{updatedLabel}</span><button className={`icon-button refresh-button ${refreshing ? 'is-refreshing' : ''}`} onClick={refreshWorkbook} aria-label="Refresh client data" title="Refresh data"><RefreshCw size={17} /></button><ThemeToggle theme={theme} onToggle={toggleTheme} />{loginRequired && <button className="icon-button" onClick={logout} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>}{showAddClient && <button className="button button-primary top-add" onClick={() => setIntakeOpen(true)}><Plus size={16} />Add client</button>}</div></header>
+        <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span>/</span><b>{pageTitle}</b></div><div className="topbar-actions"><CentralClock /><span className="sync-state"><i className="sync-dot" />{updatedLabel}</span><button className={`icon-button refresh-button ${refreshing ? 'is-refreshing' : ''}`} onClick={refreshWorkbook} aria-label="Refresh client data" title="Refresh data"><RefreshCw size={17} /></button><ThemeToggle theme={theme} onToggle={toggleTheme} />{loginRequired && <button className="icon-button" onClick={logout} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>}{onOnboardingPage
+                ? <button className="button button-primary top-add" onClick={() => setIntakeOpen('potential')}><UserPlus size={16} />Add potential client</button>
+                : showAddClient && <button className="button button-primary top-add" onClick={() => setIntakeOpen('client')}><Plus size={16} />Add client</button>}</div></header>
         <div className="page-content">
           {loadError && <div className="load-error" role="alert"><span>{loadError}</span><button onClick={refreshWorkbook}>Retry <RefreshCw size={14} /></button></div>}
           {caseError && <div className="load-error" role="alert"><span>{caseError}</span><button onClick={() => setCaseError('')}>Dismiss <X size={14} /></button></div>}
@@ -2682,7 +2709,7 @@ export default function App() {
           <footer className="page-footer"><span><i className="sync-dot" /> {dataSource} connection active</span><span>{dataSource === 'Google Sheets' ? 'Sheet checked every 20 seconds' : 'Workbook checked every 20 seconds'}</span></footer>
         </div>
       </main>
-      {intakeOpen && <ClientForm onClose={() => setIntakeOpen(false)} onCreated={createdClient} />}
+      {intakeOpen && <ClientForm key={intakeOpen} potential={intakeOpen === 'potential'} onClose={() => setIntakeOpen('')} onCreated={createdClient} />}
       {selectedClient && <ClientDetails client={selectedClient} courtDates={courtDates} onClose={() => setSelectedClient(null)} onUpdate={updateClient} onDelete={deleteClient} onSetTeamMember={setTeamMember} onSetCaseStatus={setCaseStatus} onNoteAdded={noteAdded} />}
       {toast && <div className="toast"><span><Check size={15} /></span>{toast}</div>}
     </div>
