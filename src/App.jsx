@@ -47,7 +47,7 @@ import {
   Video,
   X,
 } from 'lucide-react';
-import { CASE_TYPES, countCaseTypes, isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
+import { CASE_TYPES, NEW_CLIENT_TYPE, acceptsExistingClients, countCaseTypes,isCaseTypeSelected, updateCaseTypeValue } from './case-types.js';
 import { pageFromPath, pathForPage } from './routes.js';
 import { readImageText, scanDocument, warmUpScanner } from './document-scan.js';
 import { applyEoirScan, eoirScanFound, parseEoirText } from './eoir-scan.js';
@@ -505,7 +505,7 @@ function ClientForm({ onClose, onCreated }) {
     lastName: '',
     email: '',
     phone: '',
-    caseType: '',
+    caseType: NEW_CLIENT_TYPE,
     translator: 'No',
     onboardingDate: centralDateKey(),
     frequency: 'Once a Month',
@@ -1896,7 +1896,7 @@ function NoteSummary({ entry }) {
 }
 
 // The note log for one client's case, newest first, with a box to add another.
-function CaseNotes({ client, caseType, notes, loading, onAdded }) {
+function CaseNotes({ client, caseType, notes, loading, onAdded, expanded = false }) {
   const [text, setText] = useState('');
   const [author, setAuthor] = useState(() => {
     let remembered = '';
@@ -1905,7 +1905,7 @@ function CaseNotes({ client, caseType, notes, loading, onAdded }) {
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [showAll, setShowAll] = useState(false);
+  const [showAll, setShowAll] = useState(expanded);
   const shown = showAll ? notes : notes.slice(0, NOTES_SHOWN);
 
   async function add(event) {
@@ -1949,6 +1949,34 @@ function CaseNotes({ client, caseType, notes, loading, onAdded }) {
             </li>)}
           </ol>}
       {notes.length > NOTES_SHOWN && <button className="text-button" type="button" onClick={() => setShowAll((all) => !all)}>{showAll ? 'Show fewer' : `Show all ${notes.length} notes`}</button>}
+    </div>
+  );
+}
+
+// Popup from a case page's Notes column: past notes plus a box to add one. The server stamps each
+// note with the Central Time date and time it was saved.
+function CaseNotesPopup({ client, caseType, notes, loading, onAdded, onClose }) {
+  useEffect(() => {
+    const closeOnEscape = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div className="overlay is-centered" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="drawer note-popup" role="dialog" aria-modal="true" aria-labelledby="note-popup-title">
+        <div className="drawer-header">
+          <div>
+            <span className="eyebrow">{caseType} NOTES</span>
+            <h2 id="note-popup-title">{client.name}</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close notes"><X size={17} /></button>
+        </div>
+        <div className="note-popup-body">
+          <CaseNotes key={client.id} client={client} caseType={caseType} notes={notes} loading={loading} onAdded={onAdded} expanded />
+          <p className="field-hint">Date and time (Central Time) are added automatically when you save.</p>
+        </div>
+      </section>
     </div>
   );
 }
@@ -2030,27 +2058,32 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
   const hasNextContact = clients.some((client) => client.nextContactDate);
   const hasPayment = clients.some((client) => client.paymentStatus);
   const [statusFilter, setStatusFilter] = useState('all');
-  const [noteSummary, setNoteSummary] = useState(() => new Map());
+  const [caseNoteList, setCaseNoteList] = useState([]);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesClient, setNotesClient] = useState(null);
   const noteCaseType = view.startsWith('case:') ? view.slice('case:'.length) : '';
-  // Note count and latest note per client, for the Notes column on a case page.
+  // Every note on this case page (newest first); the Notes column and the notes popup read from it.
   useEffect(() => {
     if (!noteCaseType) return undefined;
     let active = true;
+    setNotesLoading(true);
     fetch(`/api/case-notes?caseType=${encodeURIComponent(noteCaseType)}`)
       .then((response) => (response.ok ? response.json() : { notes: [] }))
-      .then((result) => {
-        if (!active) return;
-        const summary = new Map();
-        for (const note of result.notes || []) {
-          const entry = summary.get(note.clientId) || { count: 0, latest: note };
-          entry.count += 1;
-          summary.set(note.clientId, entry);
-        }
-        setNoteSummary(summary);
-      })
-      .catch(() => {});
+      .then((result) => { if (active) setCaseNoteList(result.notes || []); })
+      .catch(() => {})
+      .finally(() => { if (active) setNotesLoading(false); });
     return () => { active = false; };
   }, [noteCaseType, notesVersion]);
+  // Note count and latest note per client, for the Notes column.
+  const noteSummary = useMemo(() => {
+    const summary = new Map();
+    for (const note of caseNoteList) {
+      const entry = summary.get(note.clientId) || { count: 0, latest: note };
+      entry.count += 1;
+      summary.set(note.clientId, entry);
+    }
+    return summary;
+  }, [caseNoteList]);
   const [selected, setSelected] = useState(() => new Set());
   const [assigning, setAssigning] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
@@ -2088,6 +2121,7 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
   }, []);
   const today = centralDateKey();
   const caseType = view.startsWith('case:') ? view.slice('case:'.length) : '';
+  const takesDrops = Boolean(caseType) && acceptsExistingClients(caseType);
   const titles = {
     clients: 'Client roster',
     payments: 'Payment list',
@@ -2163,7 +2197,7 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
       {selected.size > 0
         ? <div className="selection-bar surface" role="region" aria-label="Selected clients">
           <strong>{selected.size} selected</strong>
-          <FilterMenu label="Add selected clients to a case type" value="" onChange={(type) => assign([...selected], type, true)} icon={Plus} options={[{ value: '', label: assigning ? 'Saving…' : 'Add to…' }, ...CASE_TYPES.map((type) => ({ value: type, label: type }))]} />
+          <FilterMenu label="Add selected clients to a case type" value="" onChange={(type) => assign([...selected], type, true)} icon={Plus} options={[{ value: '', label: assigning ? 'Saving…' : 'Add to…' }, ...CASE_TYPES.filter(acceptsExistingClients).map((type) => ({ value: type, label: type }))]} />
           {caseType && <button className="button button-secondary button-remove" type="button" disabled={assigning} onClick={() => assign([...selected], caseType, false)}><X size={14} />Remove from {caseType}</button>}
           <button className="button button-secondary button-remove" type="button" onClick={() => { setBulkError(''); setBulkDeleting((open) => !open); }} aria-expanded={bulkDeleting}><Trash2 size={14} />Delete {selected.size === 1 ? 'client' : `${selected.size} clients`}</button>
           <button className="text-button" type="button" onClick={() => { setSelected(new Set()); setBulkDeleting(false); }}>Clear selection</button>
@@ -2180,13 +2214,13 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
             <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setBulkDeleting(false)} disabled={bulkBusy}>Cancel</button><button className="button button-danger" type="submit" disabled={bulkConfirm.trim() !== 'DELETE' || !bulkDeletedBy || bulkBusy}><Trash2 size={15} />{bulkBusy ? `Deleting ${selected.size}…` : 'Delete permanently'}</button></div>
           </form>}
         </div>
-        : <p className="drag-hint"><GripVertical size={14} />{caseType ? `Drag clients from the All clients list on the right into this list to add them to ${caseType}.` : 'Tip: drag a client onto a case type in the sidebar, or tick several and drag them together.'}</p>}
-      <div className={caseType ? 'case-layout' : undefined}>
+        : <p className="drag-hint"><GripVertical size={14} />{!caseType ? 'Tip: drag a client onto a case type in the sidebar, or tick several and drag them together.' : takesDrops ? `Drag clients from the All clients list on the right into this list to add them to ${caseType}.` : `New clients appear here when ${caseType} is ticked on the Add client form.`}</p>}
+      <div className={takesDrops ? 'case-layout' : undefined}>
       <section
         className={`surface roster-surface ${dropActive ? 'is-drop-active' : ''}`}
-        onDragOver={caseType ? (event) => { if (!isClientDrag(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; if (!dropActive) setDropActive(true); } : undefined}
-        onDragLeave={caseType ? (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropActive(false); } : undefined}
-        onDrop={caseType ? dropIntoCase : undefined}
+        onDragOver={takesDrops ? (event) => { if (!isClientDrag(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; if (!dropActive) setDropActive(true); } : undefined}
+        onDragLeave={takesDrops ? (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropActive(false); } : undefined}
+        onDrop={takesDrops ? dropIntoCase : undefined}
       >
         {dropActive && <div className="drop-banner" aria-hidden="true"><Plus size={16} />Drop to add to {caseType}</div>}
         <div className="roster-toolbar">
@@ -2198,12 +2232,20 @@ function ClientList({ clients, search, onSearch, onSelectClient, onAssignCaseTyp
           <FilterMenu label="Sort clients" value={sortOrder} onChange={setSortOrder} icon={ArrowDownAZ} options={[{ value: 'name', label: 'Name A-Z' }, { value: 'clientId', label: 'CL number' }]} />
         </div>
         <div className="table-scroll"><table className="client-table client-roster-table"><thead><tr><th className="select-cell"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={!selectable.length} aria-label="Select all shown clients" /></th><th>Client</th>{caseType ? <><th>Status</th><th>Team member</th><th>Notes</th></> : <th>Case type</th>}{hasFrequency && <th>Meeting frequency</th>}{hasNextContact && <th>Next contact</th>}{hasPayment && <th>Payment</th>}<th aria-label="Open client" /></tr></thead><tbody>
-          {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td>{caseType ? <><td><CaseStatusSelect value={client.caseStatus?.[caseType] || 'Not Started'} onChange={(status) => onSetCaseStatus(client, caseType, status)} label={`Status of ${client.name}'s ${caseType} case`} /></td><td><TeamSelect value={client.caseTeam?.[caseType] || ''} onChange={(member) => onSetTeamMember(client, caseType, member)} label={`Team member for ${client.name}'s ${caseType} case`} /></td><td><NoteSummary entry={noteSummary.get(client.id)} /></td></> : <td><CaseTypePills value={client.caseType} team={client.caseTeam} status={client.caseStatus} /></td>}{hasFrequency && <td>{client.frequency || <span className="muted">Not set</span>}</td>}{hasNextContact && <td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td>}{hasPayment && <td><Status value={client.paymentStatus} /></td>}<td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
-          {!visibleClients.length && <tr><td colSpan={3 + (caseType ? 3 : 1) + [hasFrequency, hasNextContact, hasPayment].filter(Boolean).length}><div className="table-empty">{caseType && !clients.some((client) => isCaseTypeSelected(client.caseType, caseType)) ? <><GripVertical size={22} /><strong>No clients in {caseType} yet</strong><span>Drag clients here from the All clients list on the right.</span></> : <><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></>}</div></td></tr>}
+          {visibleClients.map((client) => <tr key={client.id || client.email} className={selected.has(client.id) ? 'is-selected' : ''} draggable={Boolean(client.id)} onDragStart={(event) => startDrag(event, client)} onClick={() => onSelectClient(client)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && event.target === event.currentTarget && onSelectClient(client)}><td className="select-cell" onClick={(event) => event.stopPropagation()}><GripVertical size={14} className="drag-grip" aria-hidden="true" /><input type="checkbox" checked={selected.has(client.id)} onChange={() => toggleOne(client.id)} disabled={!client.id} aria-label={`Select ${client.name}`} /></td><td><div className="client-name-cell"><span className="client-initials">{client.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()}</span><span><strong>{client.name}</strong><small>{client.id} <i /> {client.email || 'No email'}</small></span></div></td>{caseType ? <><td><CaseStatusSelect value={client.caseStatus?.[caseType] || 'Not Started'} onChange={(status) => onSetCaseStatus(client, caseType, status)} label={`Status of ${client.name}'s ${caseType} case`} /></td><td><TeamSelect value={client.caseTeam?.[caseType] || ''} onChange={(member) => onSetTeamMember(client, caseType, member)} label={`Team member for ${client.name}'s ${caseType} case`} /></td><td onClick={(event) => event.stopPropagation()}><button className="note-cell-button" type="button" onClick={() => setNotesClient(client)} disabled={!client.id} aria-label={`Notes for ${client.name}'s ${caseType} case`} title="View or add notes"><NoteSummary entry={noteSummary.get(client.id)} /></button></td></> : <td><CaseTypePills value={client.caseType} team={client.caseTeam} status={client.caseStatus} /></td>}{hasFrequency && <td>{client.frequency || <span className="muted">Not set</span>}</td>}{hasNextContact && <td><span className={daysUntil(client.nextContactDate) < 0 ? 'text-overdue' : ''}>{formatDate(client.nextContactDate)}</span></td>}{hasPayment && <td><Status value={client.paymentStatus} /></td>}<td><ArrowRight size={15} className="row-arrow" /></td></tr>)}
+          {!visibleClients.length && <tr><td colSpan={3 + (caseType ? 3 : 1) + [hasFrequency, hasNextContact, hasPayment].filter(Boolean).length}><div className="table-empty">{caseType && !clients.some((client) => isCaseTypeSelected(client.caseType, caseType)) ? <><GripVertical size={22} /><strong>No clients in {caseType} yet</strong><span>{takesDrops ? 'Drag clients here from the All clients list on the right.' : 'Add a new client with Onboarding ticked.'}</span></> : <><Search size={22} /><strong>No matching clients</strong><span>Try another name or filter.</span></>}</div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visibleClients.length} of {clients.length}</span><span><i className="sync-dot" /> Synced from MasterData</span></div>
       </section>
-      {caseType && <CaseClientPicker clients={clients} caseType={caseType} onAdd={(ids) => assign(ids, caseType, true)} />}
+      {notesClient && caseType && <CaseNotesPopup
+        client={notesClient}
+        caseType={caseType}
+        notes={caseNoteList.filter((note) => note.clientId === notesClient.id)}
+        loading={notesLoading}
+        onAdded={(note) => setCaseNoteList((current) => [note, ...current])}
+        onClose={() => setNotesClient(null)}
+      />}
+      {takesDrops && <CaseClientPicker clients={clients} caseType={caseType} onAdd={(ids) => assign(ids, caseType, true)} />}
       </div>
     </>
   );
@@ -2604,10 +2646,10 @@ export default function App() {
               key={type}
               className={`nav-child ${page === `results:case:${type}` ? 'active' : ''} ${dropTarget === type ? 'is-drop-target' : ''}`}
               onClick={() => { setSearch(''); setPage(`results:case:${type}`); }}
-              onDragOver={(event) => { if (!isClientDrag(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; if (dropTarget !== type) setDropTarget(type); }}
+              onDragOver={(event) => { if (!acceptsExistingClients(type) || !isClientDrag(event)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; if (dropTarget !== type) setDropTarget(type); }}
               onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropTarget((current) => current === type ? '' : current); }}
               onDrop={(event) => dropOnCaseType(event, type)}
-              title={`Show ${type} clients, or drop clients here to add them to ${type}`}
+              title={acceptsExistingClients(type) ? `Show ${type} clients, or drop clients here to add them to ${type}` : `Show ${type} clients (new clients only)`}
             ><span>{type}</span><span className="nav-count">{caseCounts[type]}</span></button>)}
           </div>}
         </div><button className={`nav-item ${page === 'schedule' ? 'active' : ''}`} onClick={() => setPage('schedule')}><CalendarClock size={18} /><span>Schedule</span></button><button className={`nav-item ${page === 'payments' ? 'active' : ''}`} onClick={() => setPage('payments')}><CreditCard size={18} /><span>Payment</span></button><button className={`nav-item ${page === 'court-dates' || page === 'results:court-dates' ? 'active' : ''}`} onClick={() => setPage('court-dates')}><CalendarDays size={18} /><span>Court Date</span></button><button className={`nav-item ${page === 'work-permits' ? 'active' : ''}`} onClick={() => setPage('work-permits')}><Briefcase size={18} /><span>Work Permit</span></button>{EXTRA_TABS.map(({ page: tabPage, label, icon: Icon }) => <button key={tabPage} className={`nav-item ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><Icon size={18} /><span>{label}</span></button>)}</div>

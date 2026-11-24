@@ -1,6 +1,11 @@
 // Order here is the order shown in the sidebar, filters and the intake checkboxes.
 export const CASE_TYPES = ['Onboarding', 'VAWA', 'I-360', 'G-28', 'I-765', 'I-485', 'I-589'];
 
+// Onboarding is only for new clients: they join it from the Add client form, never by dragging
+// existing clients in from All clients.
+export const NEW_CLIENT_TYPE = 'Onboarding';
+export const acceptsExistingClients = (type) => type !== NEW_CLIENT_TYPE;
+
 const normalizeType = (value) => String(value ?? '').replace(/[^a-z0-9]/gi, '').toUpperCase();
 const splitTypes = (value) => String(value ?? '').split(/[+,;|/]+/).map((part) => part.trim()).filter(Boolean);
 
