@@ -1091,6 +1091,8 @@ body { font-size: var(--type-body); }
 .issue-table td small.issue-resolution { display: flex; align-items: flex-start; gap: 5px; color: #4d7b58; }
 .issue-resolution svg { flex: none; margin-top: 2px; }
 .issue-who { color: var(--ink); font-weight: 600; }
+.issue-table td.issue-affected { min-width: 110px; max-width: 200px; white-space: normal; }
+.issue-affected .case-pill { display: inline-block; margin: 2px 4px 2px 0; }
 .issue-duration { display: inline-flex; align-items: center; gap: 5px; color: #617167; font-weight: 600; }
 .issue-duration.is-open { color: #ad762e; }
 .issue-table tr.is-solved td { background: #fafbfa; }

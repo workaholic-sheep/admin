@@ -1837,7 +1837,7 @@ function IssuesPage({ category, onToast }) {
   const [loadState, setLoadState] = useState('loading');
   const [loadError, setLoadError] = useState('');
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ title: '', details: '', reportedBy: '' });
+  const [form, setForm] = useState({ title: '', details: '', reportedBy: '', affected: [] });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const [rowError, setRowError] = useState('');
@@ -1868,10 +1868,11 @@ function IssuesPage({ category, onToast }) {
   const rememberAuthor = (name) => { try { localStorage.setItem('note-author', name); } catch { /* remembered for this visit only */ } };
   const replace = (issue) => setIssues((current) => current.map((item) => item.id === issue.id ? issue : item));
   const updateForm = (event) => setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
+  const toggleAffected = (name) => setForm((current) => ({ ...current, affected: current.affected.includes(name) ? current.affected.filter((item) => item !== name) : [...current.affected, name] }));
 
   function startAdd() {
     const author = savedAuthor();
-    setForm({ title: '', details: '', reportedBy: SCHEDULE_ADDED_BY.includes(author) ? author : '' });
+    setForm({ title: '', details: '', reportedBy: SCHEDULE_ADDED_BY.includes(author) ? author : '', affected: [] });
     setFormError('');
     setAdding(true);
   }
@@ -1941,7 +1942,7 @@ function IssuesPage({ category, onToast }) {
   const timeOf = (value) => centralToDate(value)?.getTime() || 0;
   const visible = mine
     .filter((issue) => show === 'all' || (show === 'open' ? issue.status === 'Open' : issue.status === 'Solved'))
-    .filter((issue) => !query || [issue.title, issue.details, issue.reportedBy, issue.solvedBy, issue.resolution, issue.id].some((value) => String(value || '').toLowerCase().includes(query)))
+    .filter((issue) => !query || [issue.title, issue.details, issue.reportedBy, issue.affected, issue.solvedBy, issue.resolution, issue.id].some((value) => String(value || '').toLowerCase().includes(query)))
     // Open first with the longest-waiting on top; then solved, most recently solved first.
     .sort((left, right) => (left.status !== right.status
       ? (left.status === 'Open' ? -1 : 1)
@@ -1960,6 +1961,7 @@ function IssuesPage({ category, onToast }) {
           <label className="field field-wide">What’s the issue?<b>*</b><input name="title" value={form.title} onChange={updateForm} maxLength={200} required autoFocus placeholder={category === 'Tech' ? 'e.g. Front office printer won’t scan' : 'e.g. Running low on client folders'} /></label>
           <label className="field field-wide">Details (optional)<textarea name="details" value={form.details} onChange={updateForm} maxLength={2000} rows={3} placeholder="What happened, any error message, who it affects" /></label>
           <label className="field">Reported by<select name="reportedBy" value={form.reportedBy} onChange={updateForm} required><option value="" disabled>Choose…</option>{SCHEDULE_ADDED_BY.map((name) => <option key={name}>{name}</option>)}</select><ChevronDown size={15} /></label>
+          <fieldset className="case-type-picker field-wide"><legend>Affected team member (optional, pick all who apply)</legend><div className="case-type-options">{SCHEDULE_ADDED_BY.map((name) => <label key={name} className={`case-type-option ${form.affected.includes(name) ? 'selected' : ''}`}><input type="checkbox" checked={form.affected.includes(name)} onChange={() => toggleAffected(name)} />{name}</label>)}</div></fieldset>
         </div>
         {formError && <div className="form-error" role="alert">{formError}</div>}
         <div className="reminder-actions"><button className="button button-secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button button-primary" type="submit" disabled={saving}><Check size={16} />{saving ? 'Saving…' : `Log ${label}`}</button></div>
@@ -1970,13 +1972,14 @@ function IssuesPage({ category, onToast }) {
           <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search issues, people or how they were solved" aria-label="Search issues" />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
           <FilterMenu label="Show" value={show} onChange={setShow} icon={SlidersHorizontal} options={[{ value: 'open', label: `Open (${openCount})` }, { value: 'solved', label: `Solved (${solved.length})` }, { value: 'all', label: 'All' }]} />
         </div>
-        <div className="table-scroll"><table className="client-table issue-table"><thead><tr><th>Issue</th><th>Reported</th><th>Status</th><th>How long</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>
+        <div className="table-scroll"><table className="client-table issue-table"><thead><tr><th>Issue</th><th>Reported</th><th>Affected</th><th>Status</th><th>How long</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>
           {visible.map((issue) => {
             const isOpen = issue.status === 'Open';
             const duration = formatDuration(issueDuration(issue, now)) || issue.timeOpen || '—';
             return <tr key={issue.id} className={`row-static ${isOpen ? '' : 'is-solved'}`}>
               <td className="issue-main"><strong>{issue.title}</strong>{issue.details && <small className="issue-details">{issue.details}</small>}{!isOpen && issue.resolution && <small className="issue-resolution"><Check size={12} />{issue.resolution}</small>}</td>
               <td><span className="issue-who">{issue.reportedBy || '—'}</span><small>{formatNoteTime(issue.reportedAt)}</small></td>
+              <td className="issue-affected">{issue.affected ? issue.affected.split(',').map((name) => <span key={name} className="case-pill">{name.trim()}</span>) : <span className="muted">—</span>}</td>
               <td><span className={`status ${isOpen ? 'status-caution' : 'status-positive'}`}><i />{issue.status}</span>{!isOpen && <small>by {issue.solvedBy || '—'} · {formatNoteTime(issue.solvedAt)}</small>}</td>
               <td><span className={`issue-duration ${isOpen ? 'is-open' : ''}`}><Clock3 size={13} />{isOpen ? `Open ${duration}` : `Lasted ${duration}`}</span></td>
               <td className="issue-actions"><div>
@@ -1987,7 +1990,7 @@ function IssuesPage({ category, onToast }) {
               </div></td>
             </tr>;
           })}
-          {!visible.length && <tr><td colSpan="5"><div className="table-empty">{category === 'Tech' ? <Wrench size={22} /> : <AlertCircle size={22} />}<strong>{empty[0]}</strong>{empty[1] && <span>{empty[1]}</span>}</div></td></tr>}
+          {!visible.length && <tr><td colSpan="6"><div className="table-empty">{category === 'Tech' ? <Wrench size={22} /> : <AlertCircle size={22} />}<strong>{empty[0]}</strong>{empty[1] && <span>{empty[1]}</span>}</div></td></tr>}
         </tbody></table></div>
         <div className="table-foot"><span>Showing {visible.length} of {mine.length} issues</span><span><i className="sync-dot" /> Saved to the Issues tab · times in Central</span></div>
       </section>

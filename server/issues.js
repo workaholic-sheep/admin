@@ -6,7 +6,7 @@ import { centralTimestamp } from './case-assignments.js';
 // Central Time; "Time Open" is written when an issue is marked solved so the sheet shows it too.
 
 export const ISSUES_TAB = 'Issues';
-export const ISSUE_HEADERS = ['Issue ID', 'Category', 'Title', 'Details', 'Reported By', 'Reported At (CT)', 'Status', 'Solved By', 'Solved At (CT)', 'Time Open', 'Resolution'];
+export const ISSUE_HEADERS = ['Issue ID', 'Category', 'Title', 'Details', 'Reported By', 'Affected Team Member', 'Reported At (CT)', 'Status', 'Solved By', 'Solved At (CT)', 'Time Open', 'Resolution'];
 
 export class IssueError extends Error {
   constructor(message, status = 400) {
@@ -21,7 +21,8 @@ const ALIASES = {
   category: ['category', 'type', 'kind'],
   title: ['title', 'issue', 'subject', 'summary'],
   details: ['details', 'description', 'notes', 'note'],
-  reportedby: ['reportedby', 'addedby', 'teammember', 'by'],
+  reportedby: ['reportedby', 'addedby', 'by'],
+  affectedteammember: ['affectedteammember', 'affectedteammembers', 'affected', 'affectedmember', 'affectedmembers', 'teammember', 'whoisaffected'],
   reportedatct: ['reportedatct', 'reportedat', 'createdat', 'created', 'dateandtimect'],
   status: ['status'],
   solvedby: ['solvedby', 'resolvedby', 'fixedby'],
@@ -35,7 +36,7 @@ const columnOf = (headers, name) => {
 };
 
 const FIELDS = {
-  id: 'Issue ID', category: 'Category', title: 'Title', details: 'Details', reportedBy: 'Reported By', reportedAt: 'Reported At (CT)',
+  id: 'Issue ID', category: 'Category', title: 'Title', details: 'Details', reportedBy: 'Reported By', affected: 'Affected Team Member', reportedAt: 'Reported At (CT)',
   status: 'Status', solvedBy: 'Solved By', solvedAt: 'Solved At (CT)', timeOpen: 'Time Open', resolution: 'Resolution',
 };
 
@@ -74,7 +75,11 @@ export function issueInput(body) {
   if (!title) throw new IssueError('Say in a few words what the issue is.');
   if (title.length > 200) throw new IssueError('The title must be 200 characters or fewer.');
   if (details.length > 2000) throw new IssueError('Details must be 2,000 characters or fewer.');
-  return { category, title, details, reportedBy: person(input.reportedBy, 'Choose who is reporting this.') };
+  // Optional; one or more people, saved as "Kyle, Sam".
+  const affected = [...new Set((Array.isArray(input.affected) ? input.affected : String(input.affected ?? '').split(',')).map((name) => String(name).trim()).filter(Boolean))];
+  const unknown = affected.find((name) => !SCHEDULE_ADDED_BY.includes(name));
+  if (unknown) throw new IssueError(`"${unknown}" isn't on the team list.`);
+  return { category, title, details, reportedBy: person(input.reportedBy, 'Choose who is reporting this.'), affected: SCHEDULE_ADDED_BY.filter((name) => affected.includes(name)).join(', ') };
 }
 
 export function solveInput(body) {
