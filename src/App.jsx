@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowRight,
   ArrowDownAZ,
+  BookUser,
   Briefcase,
   CalendarClock,
   CalendarDays,
@@ -25,6 +26,7 @@ import {
   LoaderCircle,
   Link2,
   LogOut,
+  Mail,
   MapPin,
   Menu,
   MessageSquareText,
@@ -40,6 +42,7 @@ import {
   Search,
   SlidersHorizontal,
   ShieldCheck,
+  Stethoscope,
   Sun,
   Trash2,
   Upload,
@@ -82,6 +85,11 @@ const EXTRA_TABS = [
 const ISSUE_TABS = [
   { page: 'issues-tech', label: 'Tech Issues', category: 'Tech' },
   { page: 'issues-other', label: 'Other Issues', category: 'Other' },
+];
+
+// Pages under the Contact group; each shows one tab of Clients_Additional_Info.
+const CONTACT_TABS = [
+  { page: 'contacts-physicians', label: 'Physicians', kind: 'physicians', icon: Stethoscope },
 ];
 
 function useTheme() {
@@ -1832,6 +1840,57 @@ function SchedulePage({ clients, onSelectClient, onToast }) {
 }
 
 // Team issue log for one category (Tech or Other), saved in the Issues tab. Times are Central.
+// Shows a contact tab as-is: its own columns, searchable. Email and phone columns become links.
+function ContactListPage({ kind, label, icon: Icon }) {
+  const [data, setData] = useState({ headers: [], rows: [] });
+  const [loadState, setLoadState] = useState('loading');
+  const [loadError, setLoadError] = useState('');
+  const [search, setSearch] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setLoadState('loading');
+    fetch(`/api/contacts/${encodeURIComponent(kind)}`)
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || `Could not load ${label}.`);
+        if (active) { setData({ headers: result.headers || [], rows: result.rows || [] }); setLoadState('ready'); }
+      })
+      .catch((error) => { if (active) { setLoadError(error.message); setLoadState('error'); } });
+    return () => { active = false; };
+  }, [kind, label, reloadKey]);
+
+  const query = search.trim().toLowerCase();
+  const visible = data.rows.filter((row) => !query || row.values.some((value) => value.toLowerCase().includes(query)));
+  const linkFor = (header, value) => {
+    if (!value) return <span className="muted">—</span>;
+    if (/e-?mail/i.test(header) && /^\S+@\S+\.\S+$/.test(value)) return <a href={`mailto:${value}`}><Mail size={13} /> {value}</a>;
+    if (/phone|tel|cell|mobile/i.test(header) && /\d{3}/.test(value)) return <a href={`tel:${value.replace(/[^\d+]/g, '')}`}><Phone size={13} /> {value}</a>;
+    return value;
+  };
+  const columnCount = Math.max(data.headers.length, 1);
+
+  return (
+    <>
+      <div className="welcome-row roster-heading"><div><span className="eyebrow">CONTACT · {data.rows.length} {label.toUpperCase()}</span><h1>{label}</h1><p className="page-subtitle">From the {label} tab of Clients_Additional_Info. Edit the sheet to add or change entries.</p></div><button className="button button-secondary" onClick={() => setReloadKey((key) => key + 1)} disabled={loadState === 'loading'}><RefreshCw size={16} />Refresh</button></div>
+      <section className="surface roster-surface">
+        <div className="roster-toolbar">
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${label.toLowerCase()}`} aria-label={`Search ${label}`} />{search && <button className="clear-search" onClick={() => setSearch('')} aria-label="Clear search"><X size={15} /></button>}</label>
+        </div>
+        <div className="table-scroll"><table className="client-table contact-table"><thead><tr>{data.headers.map((header, index) => <th key={index}>{header}</th>)}{!data.headers.length && <th>{label}</th>}</tr></thead><tbody>
+          {loadState === 'ready' && visible.map((row) => <tr key={row.rowNumber} className="row-static">{row.values.map((value, index) => <td key={index}>{linkFor(data.headers[index], value)}</td>)}</tr>)}
+          {(loadState !== 'ready' || !visible.length) && <tr><td colSpan={columnCount}><div className="table-empty"><Icon size={22} />
+            <strong>{loadState === 'loading' ? `Loading ${label.toLowerCase()}…` : loadState === 'error' ? `Could not load ${label.toLowerCase()}` : data.rows.length ? 'Nothing matches' : `No ${label.toLowerCase()} yet`}</strong>
+            {loadState === 'error' ? <span>{loadError}</span> : loadState === 'ready' && <span>{data.rows.length ? 'Try a different search.' : `Add them to the ${label} tab of the spreadsheet.`}</span>}
+          </div></td></tr>}
+        </tbody></table></div>
+        <div className="table-foot"><span>Showing {visible.length} of {data.rows.length}</span><span><i className="sync-dot" /> Read from the {label} tab</span></div>
+      </section>
+    </>
+  );
+}
+
 function IssuesPage({ category, onToast }) {
   const [issues, setIssues] = useState([]);
   const [loadState, setLoadState] = useState('loading');
@@ -2714,6 +2773,12 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('nav-issues-open', String(issuesOpen)); } catch { /* remembered for this visit only */ }
   }, [issuesOpen]);
+  const [contactsOpen, setContactsOpen] = useState(() => {
+    try { return localStorage.getItem('nav-contacts-open') === 'true'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('nav-contacts-open', String(contactsOpen)); } catch { /* remembered for this visit only */ }
+  }, [contactsOpen]);
   useEffect(() => {
     // A drag cancelled or dropped elsewhere still clears the sidebar highlight.
     const clear = () => setDropTarget('');
@@ -3041,11 +3106,18 @@ export default function App() {
     setPage(ISSUE_TABS[0].page);
   };
   const issueTab = ISSUE_TABS.find((tab) => tab.page === page);
+  // Clicking Contact opens its list and shows Physicians; clicking again folds the list away.
+  const toggleContacts = () => {
+    if (contactsOpen) return setContactsOpen(false);
+    setContactsOpen(true);
+    setPage(CONTACT_TABS[0].page);
+  };
+  const contactTab = CONTACT_TABS.find((tab) => tab.page === page);
   const extraTab = EXTRA_TABS.find((tab) => tab.page === page);
   // The full intake is offered only on the Overview and All Clients pages.
   const showAddClient = page === 'dashboard' || page === 'clients';
   const onOnboardingPage = resultView === `case:${NEW_CLIENT_TYPE}`;
-  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit', schedule: 'Schedule' })[page] || extraTab?.label || issueTab?.label
+  const pageTitle = ({ dashboard: 'Overview', clients: 'Clients', payments: 'Payment', 'court-dates': 'Court Date', 'work-permits': 'Work Permit', schedule: 'Schedule' })[page] || extraTab?.label || issueTab?.label || contactTab?.label
     || (resultView === 'court-dates' ? 'Court dates' : resultView.startsWith('case:') ? `${resultView.slice('case:'.length)} clients` : ({ payments: 'Payment list', 'follow-ups': 'Upcoming follow-ups', 'follow-ups-week': 'Follow-ups this week', clients: 'Client roster' })[resultView])
     || 'Overview';
   if (authStatus === 'checking') return <main className="login-screen"><img className="login-mark" src="/logo.png" alt="Loading" width="48" height="48" /></main>;
@@ -3078,6 +3150,13 @@ export default function App() {
           {issuesOpen && <div className="nav-children" id="nav-issue-types">
             {ISSUE_TABS.map(({ page: tabPage, label }) => <button key={tabPage} className={`nav-child ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><span>{label}</span></button>)}
           </div>}
+        </div><div className="nav-group">
+          <div className="nav-group-head">
+            <button className={`nav-item ${contactTab && !contactsOpen ? 'active' : ''} ${contactTab ? 'is-current' : ''}`} onClick={toggleContacts} aria-expanded={contactsOpen} aria-controls="nav-contact-types"><BookUser size={18} /><span>Contact</span></button>
+          </div>
+          {contactsOpen && <div className="nav-children" id="nav-contact-types">
+            {CONTACT_TABS.map(({ page: tabPage, label }) => <button key={tabPage} className={`nav-child ${page === tabPage ? 'active' : ''}`} onClick={() => setPage(tabPage)}><span>{label}</span></button>)}
+          </div>}
         </div></div>
         <div className="sidebar-bottom"><div className="workbook-chip"><FileSpreadsheet size={17} /><span><b>MasterData</b><small>{dataSource === 'Google Sheets' ? 'Google Sheets' : 'Excel workbook'}</small></span><span className="live-mark" title="Live data connection" /></div><div className="sidebar-user"><span className="user-avatar">CS</span><span><b>Case services</b><small>{loginRequired ? 'Private workspace' : 'Local workspace'}</small></span><Menu size={17} /></div></div>
       </aside>
@@ -3106,6 +3185,8 @@ export default function App() {
                 ? <CredentialsPage onToast={setToast} />
               : issueTab
                 ? <IssuesPage key={issueTab.page} category={issueTab.category} onToast={setToast} />
+              : contactTab
+                ? <ContactListPage key={contactTab.page} kind={contactTab.kind} label={contactTab.label} icon={contactTab.icon} />
               : extraTab
                 ? <ComingSoon key={extraTab.page} title={extraTab.label} icon={extraTab.icon} />
               : <Dashboard clients={clients} courtDates={courtDates} now={new Date()} onShowClients={() => setPage('clients')} onShowResults={showMetricResults} onShowSchedule={() => setPage('schedule')} onSelectClient={setSelectedClient} onCompleteFollowUp={completeFollowUp} />}

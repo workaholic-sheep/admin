@@ -14,6 +14,7 @@ import { nameParts } from '../src/names.js';
 import { CASE_STATUSES } from '../src/case-status.js';
 import { ScheduleError, createSchedule, scheduleInput } from './schedule.js';
 import { IssueError, createIssues, issueInput, solveInput } from './issues.js';
+import { ContactError, createContacts } from './contacts.js';
 import { CourtDateError, courtDateInput, createCourtDates, listNewCourtDates } from './court-dates.js';
 import { createGoogleTabs, createWorkbookTabs } from './sheet-tabs.js';
 import { CASE_TYPES, isCaseTypeSelected } from '../src/case-types.js';
@@ -76,6 +77,7 @@ try {
 const cases = createCaseAssignments(caseTabs, caseSetupMessage);
 const schedule = createSchedule(caseTabs, caseSetupMessage);
 const issues = createIssues(caseTabs, caseSetupMessage);
+const contacts = createContacts(caseTabs, caseSetupMessage);
 const newCourtDates = createCourtDates(caseTabs, 'Court dates are saved in the Court_Dates tab of Clients_Additional_Info, which isn\'t connected yet (GOOGLE_CASES_SHEET_ID).', centralTimestamp);
 const SYNC_EVERY_MS = 60 * 1000;
 let lastSync = 0;
@@ -321,6 +323,16 @@ app.post('/api/issues/:id/reopen', issueRoute(async (request, response) => {
 app.delete('/api/issues/:id', issueRoute(async (request, response) => {
   response.json({ issue: await issues.remove(request.params.id) });
 }));
+
+// Contact lists (Physicians tab), shown read-only with the tab's own columns.
+app.get('/api/contacts/:kind', async (request, response, next) => {
+  try {
+    response.json(await contacts.list(request.params.kind));
+  } catch (error) {
+    if (error instanceof ContactError) return response.status(error.status).json({ error: error.message });
+    return next(error);
+  }
+});
 
 // Case notes: an add-only log in the Case_Notes tab. The server stamps each note in Central Time.
 app.get('/api/case-notes', async (request, response, next) => {

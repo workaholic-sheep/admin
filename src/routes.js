@@ -1,7 +1,7 @@
 import { CASE_TYPES } from './case-types.js';
 
 // Address for each admin tab. Filtered client lists live under /clients/<view>.
-export const PAGE_PATHS = { dashboard: '/', clients: '/clients', payments: '/payment', 'court-dates': '/courtdate', 'work-permits': '/workpermit', schedule: '/schedule', pdf: '/pdf', forms: '/forms', credentials: '/credentials', 'issues-tech': '/issues/tech', 'issues-other': '/issues/other' };
+export const PAGE_PATHS = { dashboard: '/', clients: '/clients', payments: '/payment', 'court-dates': '/courtdate', 'work-permits': '/workpermit', schedule: '/schedule', pdf: '/pdf', forms: '/forms', credentials: '/credentials', 'issues-tech': '/issues/tech', 'issues-other': '/issues/other', 'contacts-physicians': '/contact/physicians' };
 const RESULT_VIEWS = ['clients', 'follow-ups', 'follow-ups-week', 'payments'];
 
 export function pathForPage(page) {
